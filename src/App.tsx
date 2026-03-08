@@ -7,6 +7,7 @@ import Index from "./pages/Index";
 import HowItWorks from "./pages/HowItWorks";
 import CustomerValue from "./pages/CustomerValue";
 import NetworkGrowth from "./pages/NetworkGrowth";
+import MarketOpportunity from "./pages/MarketOpportunity";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
