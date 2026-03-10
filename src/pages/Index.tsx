@@ -174,11 +174,16 @@ function InlineStatCard({ icon: Icon, bg, iconColor, label, value, unit, sub }: 
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────
 const Index = () => {
+  const [setupComplete, setSetupComplete] = useState(false);
   const [rates, setRates] = useState<Rate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [now, setNow] = useState(new Date());
+
+  if (!setupComplete) {
+    return <GridlySetup onComplete={() => setSetupComplete(true)} />;
+  }
 
   const g = SANDBOX.givenergy;
   const z = SANDBOX.zappi;
