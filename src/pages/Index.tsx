@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Sun, Zap, Battery, ArrowUpRight, PoundSterling, TrendingUp, RefreshCw, Wifi, WifiOff, ChevronRight, AlertCircle } from "lucide-react";
+import GridlySetup from "./GridlySetup";
 
 // ── SANDBOX DATA (replace with real API keys when ready) ──────────────────
 const SANDBOX = {
@@ -173,6 +174,7 @@ function InlineStatCard({ icon: Icon, bg, iconColor, label, value, unit, sub }: 
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────
 const Index = () => {
+  const [setupComplete, setSetupComplete] = useState(false);
   const [rates, setRates] = useState<Rate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -201,6 +203,10 @@ const Index = () => {
     const t = setInterval(() => setNow(new Date()), 30000);
     return () => clearInterval(t);
   }, []);
+
+  if (!setupComplete) {
+    return <GridlySetup onComplete={() => setSetupComplete(true)} />;
+  }
 
   const currentRate = getCurrentRate(rates);
   const nextRates = getNextRates(rates, 8);
