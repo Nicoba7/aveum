@@ -181,10 +181,6 @@ const Index = () => {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [now, setNow] = useState(new Date());
 
-  if (!setupComplete) {
-    return <GridlySetup onComplete={() => setSetupComplete(true)} />;
-  }
-
   const g = SANDBOX.givenergy;
   const z = SANDBOX.zappi;
 
@@ -207,6 +203,10 @@ const Index = () => {
     const t = setInterval(() => setNow(new Date()), 30000);
     return () => clearInterval(t);
   }, []);
+
+  if (!setupComplete) {
+    return <GridlySetup onComplete={() => setSetupComplete(true)} />;
+  }
 
   const currentRate = getCurrentRate(rates);
   const nextRates = getNextRates(rates, 8);
