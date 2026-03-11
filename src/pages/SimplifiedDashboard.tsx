@@ -1,3 +1,4 @@
+import SavingsHistory from "./SavingsHistory";
 import NightlyPlan from "./NightlyPlan";
 import { useState, useEffect } from "react";
 import { Sun, Battery, Zap, Grid3X3, TrendingUp, ChevronRight, AlertCircle, PoundSterling } from "lucide-react";
@@ -190,6 +191,10 @@ export default function SimplifiedDashboard() {
         </div>
       </div>
 
+      <div style={{ margin: "0 20px" }}>
+      <SavingsHistory />
+      </div>
+      
       {/* Gridly decision */}
       <div style={{ margin: "0 20px 16px", background: "#111827", border: "1px solid #16A34A40", borderRadius: 16, padding: "12px 16px" }}>
         <div style={{ fontSize: 10, color: "#16A34A", fontWeight: 700, letterSpacing: 1.2, marginBottom: 4 }}>GRIDLY DECISION</div>
