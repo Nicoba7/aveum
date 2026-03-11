@@ -118,6 +118,101 @@ function FlowDot({ active, color }: { active: boolean; color: string }) {
   );
 }
 
+// ── MANUAL OVERRIDE ───────────────────────────────────────────────────────
+function ManualOverride({ currentPence, connectedDevices }: { currentPence: number; connectedDevices: typeof ALL_DEVICES }) {
+  const [override, setOverride] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const hasBattery = connectedDevices.some(d => d.id === "battery");
+  const hasEV = connectedDevices.some(d => d.id === "ev");
+  const isExpensive = currentPence > 20;
+
+  const handleOverride = (action: string) => {
+    if (override === action) {
+      setOverride(null); // cancel
+    } else {
+      setOverride(action);
+    }
+    setExpanded(false);
+  };
+
+  if (!hasBattery && !hasEV) return null;
+
+  return (
+    <div style={{ margin: "0 20px 16px" }}>
+      {override ? (
+        // Active override state
+        <div style={{ background: "#1A1A2E", border: "1px solid #38BDF840", borderRadius: 16, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, color: "#38BDF8", fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>MANUAL OVERRIDE ACTIVE</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>
+              {override === "charge_now" ? "⚡ Charging now" : override === "charge_ev" ? "🚗 Charging EV" : "⏸ Paused"}
+            </div>
+            <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>
+              {isExpensive ? `Currently ${currentPence}p — not the cheapest but charging as requested` : `Currently ${currentPence}p — good time to charge`}
+            </div>
+          </div>
+          <button
+            onClick={() => setOverride(null)}
+            style={{ background: "#374151", border: "none", borderRadius: 8, padding: "6px 12px", color: "#9CA3AF", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0, marginLeft: 12 }}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : !expanded ? (
+        // Collapsed — just a subtle button
+        <button
+          onClick={() => setExpanded(true)}
+          style={{ width: "100%", background: "none", border: "1px dashed #374151", borderRadius: 12, padding: "10px 16px", color: "#6B7280", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+        >
+          <span>Manual override</span>
+          <span style={{ fontSize: 11, color: "#4B5563" }}>Now: {currentPence}p/kWh</span>
+        </button>
+      ) : (
+        // Expanded — show options
+        <div style={{ background: "#111827", border: "1px solid #374151", borderRadius: 16, padding: "14px 16px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: "#6B7280", fontWeight: 700, letterSpacing: 1 }}>OVERRIDE GRIDLY</div>
+            <div style={{ fontSize: 12, color: isExpensive ? "#EF4444" : "#22C55E", fontWeight: 700 }}>{currentPence}p/kWh now</div>
+          </div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {hasBattery && (
+              <button
+                onClick={() => handleOverride("charge_now")}
+                style={{ background: "#16A34A15", border: "1px solid #16A34A30", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#22C55E", marginBottom: 2 }}>⚡ Charge battery now</div>
+                <div style={{ fontSize: 11, color: "#6B7280" }}>Force charge regardless of price</div>
+              </button>
+            )}
+            {hasEV && (
+              <button
+                onClick={() => handleOverride("charge_ev")}
+                style={{ background: "#38BDF815", border: "1px solid #38BDF830", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#38BDF8", marginBottom: 2 }}>🚗 Charge EV now</div>
+                <div style={{ fontSize: 11, color: "#6B7280" }}>Start charging at {currentPence}p/kWh</div>
+              </button>
+            )}
+            <button
+              onClick={() => handleOverride("pause")}
+              style={{ background: "#37415115", border: "1px solid #37415130", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#9CA3AF", marginBottom: 2 }}>⏸ Pause Gridly</div>
+              <div style={{ fontSize: 11, color: "#6B7280" }}>Stop all automated actions temporarily</div>
+            </button>
+          </div>
+          <button
+            onClick={() => setExpanded(false)}
+            style={{ marginTop: 10, background: "none", border: "none", color: "#4B5563", fontSize: 11, cursor: "pointer", fontFamily: "inherit", padding: 0 }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── HOME TAB ──────────────────────────────────────────────────────────────
 function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVICES; now: Date }) {
   const hour = now.getHours();
@@ -165,11 +260,13 @@ function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVIC
         </div>
       </div>
 
-   {/* Energy flow — only connected devices */}
+      {/* Manual override */}
+      <ManualOverride currentPence={currentPence} connectedDevices={connectedDevices} />
+
+      {/* Energy flow — only connected devices */}
       <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "20px" }}>
         <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 20 }}>LIVE ENERGY FLOW</div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-
           {connectedDevices.some(d => d.id === "solar") && <>
             <div style={{ textAlign: "center" }}>
               <div style={{ width: 52, height: 52, background: "#F59E0B15", border: "1.5px solid #F59E0B30", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
@@ -180,7 +277,6 @@ function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVIC
             </div>
             <FlowDot active={s.w > 0} color="#F59E0B" />
           </>}
-
           <div style={{ textAlign: "center" }}>
             <div style={{ width: 52, height: 52, background: "#ffffff10", border: "1.5px solid #ffffff20", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
               <Home size={22} color="#E5E7EB" />
@@ -188,7 +284,6 @@ function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVIC
             <div style={{ fontSize: 13, fontWeight: 800, color: "#F9FAFB" }}>{(s.homeW / 1000).toFixed(1)}kW</div>
             <div style={{ fontSize: 10, color: "#6B7280" }}>Home</div>
           </div>
-
           {connectedDevices.some(d => d.id === "battery") && <>
             <FlowDot active={isCharging} color="#16A34A" />
             <div style={{ textAlign: "center" }}>
@@ -199,7 +294,6 @@ function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVIC
               <div style={{ fontSize: 10, color: "#6B7280" }}>Battery</div>
             </div>
           </>}
-
           {connectedDevices.some(d => d.id === "ev") && <>
             <FlowDot active={isCharging} color="#38BDF8" />
             <div style={{ textAlign: "center" }}>
@@ -210,7 +304,6 @@ function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVIC
               <div style={{ fontSize: 10, color: "#6B7280" }}>EV</div>
             </div>
           </>}
-
           {connectedDevices.some(d => d.id === "grid") && <>
             <FlowDot active={isExporting} color="#F59E0B" />
             <div style={{ textAlign: "center" }}>
@@ -223,9 +316,9 @@ function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVIC
               <div style={{ fontSize: 10, color: "#6B7280" }}>{isExporting ? "Exporting" : "Grid"}</div>
             </div>
           </>}
-
         </div>
       </div>
+
       {/* Connected devices */}
       <div style={{ margin: "0 20px" }}>
         <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>CONNECTED</div>
