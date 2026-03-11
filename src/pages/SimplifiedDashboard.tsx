@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import TomorrowForecast from "./TomorrowForecast";
 import { Sun, Battery, Zap, Grid3X3, TrendingUp, Home, Calendar, Clock } from "lucide-react";
 
 // ── DEVICE CONFIG ─────────────────────────────────────────────────────────
@@ -218,7 +219,11 @@ function PlanTab() {
         <div style={{ fontSize: 13, color: "#9CA3AF" }}>Projected value tonight</div>
         <div style={{ fontSize: 22, fontWeight: 900, color: "#22C55E" }}>+£{projectedValue}</div>
       </div>
-
+      
+      <div style={{ margin: "0 20px" }}>
+        <TomorrowForecast />
+      </div>
+      
       <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "16px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1 }}>PRICES TODAY</div>
