@@ -4,10 +4,10 @@ import TomorrowForecast from "./TomorrowForecast";
 
 // ── DEVICE CONFIG ─────────────────────────────────────────────────────────
 const ALL_DEVICES = [
-  { id: "solar", name: "Solar Inverter", status: "2.8kW generating", monthlyValue: 35, icon: Sun, color: "#F59E0B" },
-  { id: "battery", name: "Home Battery", status: "62% charged", monthlyValue: 32, icon: Battery, color: "#16A34A" },
-  { id: "ev", name: "EV Charger", status: "Connected", monthlyValue: 26, icon: Zap, color: "#38BDF8" },
-  { id: "grid", name: "Smart Meter", status: "Live pricing", monthlyValue: 15, icon: Grid3X3, color: "#A78BFA" },
+  { id: "solar",   name: "Solar Inverter", status: "2.8kW generating", monthlyValue: 35, icon: Sun,      color: "#F59E0B", historyColor: "#F59E0B" },
+  { id: "battery", name: "Home Battery",   status: "62% charged",      monthlyValue: 32, icon: Battery,  color: "#22C55E", historyColor: "#22C55E" },
+  { id: "ev",      name: "EV Charger",     status: "Connected",        monthlyValue: 26, icon: Zap,      color: "#38BDF8", historyColor: "#38BDF8" },
+  { id: "grid",    name: "Smart Meter",    status: "Live pricing",     monthlyValue: 15, icon: Grid3X3,  color: "#A78BFA", historyColor: "#A78BFA" },
 ];
 
 // ── SANDBOX DATA ──────────────────────────────────────────────────────────
@@ -18,13 +18,21 @@ const SANDBOX = {
   allTimeSince: "March 2024",
   solar: { w: 2840, batteryPct: 62, gridW: 420, homeW: 1200 },
   history: [
-    { day: "Mon", saved: 2.14, earned: 0.63 },
-    { day: "Tue", saved: 3.42, earned: 1.21 },
-    { day: "Wed", saved: 1.87, earned: 0.44 },
-    { day: "Thu", saved: 4.11, earned: 1.84 },
-    { day: "Fri", saved: 2.93, earned: 0.97 },
-    { day: "Sat", saved: 5.24, earned: 2.31 },
-    { day: "Sun", saved: 3.76, earned: 1.52 },
+    { day: "Mon", solar: 1.24, battery: 0.98, ev: 0.63, grid: 0.18 },
+    { day: "Tue", solar: 2.11, battery: 1.42, ev: 1.21, grid: 0.31 },
+    { day: "Wed", solar: 0.94, battery: 0.87, ev: 0.44, grid: 0.12 },
+    { day: "Thu", solar: 2.64, battery: 1.84, ev: 1.84, grid: 0.47 },
+    { day: "Fri", solar: 1.52, battery: 1.21, ev: 0.97, grid: 0.22 },
+    { day: "Sat", solar: 3.41, battery: 2.31, ev: 2.31, grid: 0.58 },
+    { day: "Sun", solar: 2.18, battery: 1.52, ev: 1.52, grid: 0.34 },
+  ],
+  plan: [
+    { time: "11:30pm", action: "CHARGE", title: "Charging your battery",    reason: "Cheapest rate of the night",         price: 4.8,  color: "#22C55E" },
+    { time: "2:00am",  action: "HOLD",   title: "Resting overnight",        reason: "Nothing to do — battery full",       price: 5.1,  color: "#6B7280" },
+    { time: "8:00am",  action: "EXPORT", title: "Selling to the grid",      reason: "High price — earning for you",       price: 31.2, color: "#F59E0B" },
+    { time: "11:00am", action: "SOLAR",  title: "Solar powering your home", reason: "Free electricity from your panels",  price: 9.6,  color: "#F59E0B" },
+    { time: "5:30pm",  action: "EXPORT", title: "Peak earnings window",     reason: "Best price of the day",              price: 38.6, color: "#F59E0B" },
+    { time: "8:00pm",  action: "CHARGE", title: "Topping up for tomorrow",  reason: "Price dropping — refilling now",     price: 11.8, color: "#22C55E" },
   ],
 };
 
@@ -69,6 +77,17 @@ function getBestChargeSlot() {
   );
 }
 
+function getGridlyMode(pence: number) {
+  if (pence < 8) return "CHARGE";
+  if (pence > 30) return "EXPORT";
+  return "HOLD";
+}
+
+function calculateSavings() {
+  const peak = 38.6, charge = 4.8, batterySize = 10;
+  return ((peak - charge) / 100 * batterySize).toFixed(2);
+}
+
 function getBarColor(p: number) {
   if (p < 10) return "#22C55E";
   if (p < 20) return "#F59E0B";
@@ -76,97 +95,11 @@ function getBarColor(p: number) {
   return "#EF4444";
 }
 
-// ── PERSONALISED DECISION CARD ────────────────────────────────────────────
-function getDecision(devices: string[], pence: number, best: { time: string; price: number }) {
-  const hasSolar = devices.includes("solar");
-  const hasBattery = devices.includes("battery");
-  const hasEV = devices.includes("ev");
-
-  // Full stack
-  if (hasBattery && hasSolar && hasEV) {
-    if (pence < 8) return { icon: "⚡", label: "CHARGING", color: "#22C55E", bg: "#0D1F14", border: "#16A34A30", text: `Buying at ${pence}p — filling battery and car while prices are low.` };
-    if (pence > 30) return { icon: "💰", label: "EXPORTING", color: "#F59E0B", bg: "#1A1200", border: "#F59E0B30", text: `Selling to the grid at ${pence}p — peak price, earning for you now.` };
-    return { icon: "⏸", label: "HOLDING", color: "#9CA3AF", bg: "#0D1117", border: "#1F2937", text: `Price is ${pence}p — waiting for cheaper slot at ${best.time} (${best.price}p).` };
-  }
-
-  // EV only
-  if (hasEV && !hasBattery && !hasSolar) {
-    if (pence < 8) return { icon: "⚡", label: "CHARGING YOUR CAR", color: "#38BDF8", bg: "#001A20", border: "#38BDF830", text: `Charging at ${pence}p — saving vs peak rate. Car will be ready by morning.` };
-    return { icon: "⏸", label: "WAITING", color: "#9CA3AF", bg: "#0D1117", border: "#1F2937", text: `Price is ${pence}p — waiting for cheapest slot at ${best.time} (${best.price}p) to charge your car.` };
-  }
-
-  // Solar + smart meter, no battery
-  if (hasSolar && !hasBattery) {
-    if (pence > 30) return { icon: "💰", label: "EXPORTING", color: "#F59E0B", bg: "#1A1200", border: "#F59E0B30", text: `Selling solar to the grid at ${pence}p — good rate right now.` };
-    return { icon: "☀️", label: "SOLAR MODE", color: "#F59E0B", bg: "#1A1200", border: "#F59E0B20", text: `Solar is powering your home. Excess will export when prices rise above 30p.` };
-  }
-
-  // Battery only, no solar
-  if (hasBattery && !hasSolar) {
-    if (pence < 8) return { icon: "⚡", label: "CHARGING", color: "#22C55E", bg: "#0D1F14", border: "#16A34A30", text: `Filling battery at ${pence}p — will discharge during peak hours.` };
-    if (pence > 30) return { icon: "💰", label: "DISCHARGING", color: "#F59E0B", bg: "#1A1200", border: "#F59E0B30", text: `Using stored energy at ${pence}p peak — avoiding grid cost.` };
-    return { icon: "⏸", label: "HOLDING", color: "#9CA3AF", bg: "#0D1117", border: "#1F2937", text: `Price is ${pence}p — waiting for cheapest slot at ${best.time} (${best.price}p).` };
-  }
-
-  // Smart meter only
-  return { icon: "📊", label: "MONITORING", color: "#A78BFA", bg: "#0D0D1A", border: "#A78BFA20", text: `Tracking your usage. Add a battery or EV charger to start saving automatically.` };
-}
-
-// ── PERSONALISED PLAN ─────────────────────────────────────────────────────
-function getPlan(devices: string[]) {
-  const hasSolar = devices.includes("solar");
-  const hasBattery = devices.includes("battery");
-  const hasEV = devices.includes("ev");
-
-  // Full stack
-  if (hasBattery && hasSolar && hasEV) {
-    return [
-      { time: "11:30pm", action: "CHARGE", title: "Charging your battery", reason: "Cheapest rate of the night", price: 4.8, color: "#22C55E" },
-      { time: "2:00am",  action: "CHARGE", title: "Charging your car",     reason: "Still cheap — topping up EV", price: 5.1, color: "#38BDF8" },
-      { time: "6:00am",  action: "HOLD",   title: "Resting — battery full", reason: "Nothing to do until morning peak", price: 6.2, color: "#6B7280" },
-      { time: "8:00am",  action: "EXPORT", title: "Selling to the grid",   reason: "High price — earning for you", price: 31.2, color: "#F59E0B" },
-      { time: "11:00am", action: "SOLAR",  title: "Solar powering your home", reason: "Free electricity from your panels", price: 9.6, color: "#F59E0B" },
-      { time: "5:30pm",  action: "EXPORT", title: "Peak earnings window",  reason: "Best price of the day", price: 38.6, color: "#F59E0B" },
-      { time: "8:00pm",  action: "CHARGE", title: "Topping up for tomorrow", reason: "Price dropping — refilling now", price: 11.8, color: "#22C55E" },
-    ];
-  }
-
-  // EV only
-  if (hasEV && !hasBattery && !hasSolar) {
-    return [
-      { time: "12:30am", action: "CHARGE", title: "Charging your car",     reason: "Price dropping — starting charge", price: 6.1, color: "#38BDF8" },
-      { time: "3:00am",  action: "CHARGE", title: "Cheapest rate of the night", reason: "Filling to your target %", price: 4.8, color: "#38BDF8" },
-      { time: "6:00am",  action: "HOLD",   title: "Car charged and ready", reason: "Full charge before morning — done", price: 6.2, color: "#22C55E" },
-      { time: "5:30pm",  action: "HOLD",   title: "Avoiding peak rate",    reason: "Not charging now — price too high", price: 38.6, color: "#6B7280" },
-      { time: "10:00pm", action: "CHARGE", title: "Evening top-up",        reason: "Price falling — ready for tomorrow", price: 10.1, color: "#38BDF8" },
-    ];
-  }
-
-  // Solar + smart meter, no battery
-  if (hasSolar && !hasBattery) {
-    return [
-      { time: "8:00am",  action: "SOLAR",  title: "Solar powering your home", reason: "Free electricity — zero grid cost", price: 9.6, color: "#F59E0B" },
-      { time: "11:00am", action: "SOLAR",  title: "Peak solar generation", reason: "Maximum output — using everything", price: 9.1, color: "#F59E0B" },
-      { time: "5:30pm",  action: "EXPORT", title: "Exporting to the grid", reason: "Surplus solar at peak price", price: 38.6, color: "#F59E0B" },
-      { time: "8:00pm",  action: "HOLD",   title: "Solar finished for today", reason: "Grid import only until morning", price: 14.2, color: "#6B7280" },
-    ];
-  }
-
-  // Battery only
-  if (hasBattery && !hasSolar) {
-    return [
-      { time: "3:00am",  action: "CHARGE", title: "Charging your battery", reason: "Cheapest rate — filling overnight", price: 4.8, color: "#22C55E" },
-      { time: "6:00am",  action: "HOLD",   title: "Battery full — resting", reason: "Holding until peak hours", price: 6.2, color: "#6B7280" },
-      { time: "5:30pm",  action: "EXPORT", title: "Discharging at peak",   reason: "Avoiding expensive grid electricity", price: 38.6, color: "#F59E0B" },
-      { time: "8:00pm",  action: "CHARGE", title: "Topping up for tomorrow", reason: "Price dropping — refilling now", price: 11.8, color: "#22C55E" },
-    ];
-  }
-
-  // Smart meter only
-  return [
-    { time: "All day", action: "HOLD", title: "Monitoring your usage", reason: "Add a battery or EV to start optimising", price: 0, color: "#A78BFA" },
-  ];
-}
+const MODE_CONFIG = {
+  CHARGE: { icon: "⚡", label: "CHARGING", color: "#22C55E", bg: "#0D1F14", border: "#16A34A30", description: (best: any, current: number) => `Buying at ${current}p — filling your battery now while prices are low.` },
+  EXPORT: { icon: "💰", label: "EXPORTING", color: "#F59E0B", bg: "#1A1200", border: "#F59E0B30", description: (best: any, current: number) => `Selling to the grid at ${current}p — peak price, earning for you now.` },
+  HOLD:   { icon: "⏸", label: "HOLDING",   color: "#9CA3AF", bg: "#0D1117", border: "#1F2937",   description: (best: any, current: number) => `Price is ${current}p — waiting for cheaper slot at ${best.time} (${best.price}p).` },
+};
 
 // ── FLOW DOTS ─────────────────────────────────────────────────────────────
 function FlowDot({ active, color }: { active: boolean; color: string }) {
@@ -185,42 +118,18 @@ function FlowDot({ active, color }: { active: boolean; color: string }) {
   );
 }
 
-// ── ENERGY FLOW NODE ──────────────────────────────────────────────────────
-function FlowNode({ icon: Icon, color, label, value }: { icon: any; color: string; label: string; value: string }) {
-  return (
-    <div style={{ textAlign: "center" }}>
-      <div style={{ width: 52, height: 52, background: `${color}15`, border: `1.5px solid ${color}30`, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
-        <Icon size={22} color={color} />
-      </div>
-      <div style={{ fontSize: 13, fontWeight: 800, color: "#F9FAFB" }}>{value}</div>
-      <div style={{ fontSize: 10, color: "#6B7280" }}>{label}</div>
-    </div>
-  );
-}
-
 // ── HOME TAB ──────────────────────────────────────────────────────────────
-function HomeTab({ devices, connectedDevices, now }: { devices: string[]; connectedDevices: typeof ALL_DEVICES; now: Date }) {
+function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVICES; now: Date }) {
   const hour = now.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const slotIndex = getCurrentSlotIndex();
   const currentPence = AGILE_RATES[slotIndex].pence;
+  const mode = getGridlyMode(currentPence);
   const best = getBestChargeSlot();
-  const decision = getDecision(devices, currentPence, best);
+  const cfg = MODE_CONFIG[mode];
   const s = SANDBOX.solar;
-
-  const hasSolar = devices.includes("solar");
-  const hasBattery = devices.includes("battery");
-  const hasEV = devices.includes("ev");
-  const isExporting = s.gridW > 0 && hasSolar;
-
-  // Build flow nodes dynamically
-  const flowNodes: { icon: any; color: string; label: string; value: string; dotColor: string; dotActive: boolean }[] = [];
-
-  if (hasSolar) flowNodes.push({ icon: Sun, color: "#F59E0B", label: "Solar", value: `${(s.w / 1000).toFixed(1)}kW`, dotColor: "#F59E0B", dotActive: s.w > 0 });
-  flowNodes.push({ icon: Home, color: "#E5E7EB", label: "Home", value: `${(s.homeW / 1000).toFixed(1)}kW`, dotColor: "#ffffff", dotActive: true });
-  if (hasBattery) flowNodes.push({ icon: Battery, color: "#22C55E", label: "Battery", value: `${s.batteryPct}%`, dotColor: "#16A34A", dotActive: decision.label.includes("CHARG") });
-  if (hasEV) flowNodes.push({ icon: Zap, color: "#38BDF8", label: "EV", value: "Connected", dotColor: "#38BDF8", dotActive: decision.label.includes("CAR") });
-  if (isExporting) flowNodes.push({ icon: TrendingUp, color: "#F59E0B", label: "Exporting", value: `${(s.gridW / 1000).toFixed(1)}kW`, dotColor: "#F59E0B", dotActive: true });
+  const isExporting = s.gridW > 0;
+  const isCharging = mode === "CHARGE";
 
   return (
     <div>
@@ -245,29 +154,54 @@ function HomeTab({ devices, connectedDevices, now }: { devices: string[]; connec
         </div>
       </div>
 
-      {/* Dynamic decision card */}
-      <div style={{ margin: "0 20px 16px", background: decision.bg, border: `1px solid ${decision.border}`, borderRadius: 16, padding: "16px 20px" }}>
-        <div style={{ fontSize: 10, color: decision.color, fontWeight: 700, letterSpacing: 1.5, marginBottom: 8 }}>RIGHT NOW</div>
-        <div style={{ fontSize: 22, fontWeight: 900, color: decision.color, letterSpacing: -0.5, marginBottom: 4 }}>
-          {decision.icon} {decision.label}
+      {/* Dynamic mode card */}
+      <div style={{ margin: "0 20px 16px", background: cfg.bg, border: `1px solid ${cfg.border}`, borderRadius: 16, padding: "16px 20px" }}>
+        <div style={{ fontSize: 10, color: cfg.color, fontWeight: 700, letterSpacing: 1.5, marginBottom: 8 }}>RIGHT NOW</div>
+        <div style={{ fontSize: 22, fontWeight: 900, color: cfg.color, letterSpacing: -0.5, marginBottom: 4 }}>
+          {cfg.icon} {cfg.label}
         </div>
-        <div style={{ fontSize: 13, color: "#9CA3AF", lineHeight: 1.5 }}>{decision.text}</div>
+        <div style={{ fontSize: 13, color: "#9CA3AF", lineHeight: 1.5 }}>
+          {cfg.description(best, currentPence)}
+        </div>
       </div>
 
-      {/* Dynamic energy flow */}
+      {/* Energy flow */}
       <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "20px" }}>
         <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 20 }}>LIVE ENERGY FLOW</div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "nowrap", overflowX: "auto" }}>
-          {flowNodes.map((node, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 0 }}>
-              <FlowNode icon={node.icon} color={node.color} label={node.label} value={node.value} />
-              {i < flowNodes.length - 1 && (
-                <div style={{ margin: "0 4px", marginBottom: 16 }}>
-                  <FlowDot active={node.dotActive} color={node.dotColor} />
-                </div>
-              )}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ width: 52, height: 52, background: "#F59E0B15", border: "1.5px solid #F59E0B30", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
+              <Sun size={22} color="#F59E0B" />
             </div>
-          ))}
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#F9FAFB" }}>{(s.w / 1000).toFixed(1)}kW</div>
+            <div style={{ fontSize: 10, color: "#6B7280" }}>Solar</div>
+          </div>
+          <FlowDot active={s.w > 0} color="#F59E0B" />
+          <div style={{ textAlign: "center" }}>
+            <div style={{ width: 52, height: 52, background: "#ffffff10", border: "1.5px solid #ffffff20", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
+              <Home size={22} color="#E5E7EB" />
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#F9FAFB" }}>{(s.homeW / 1000).toFixed(1)}kW</div>
+            <div style={{ fontSize: 10, color: "#6B7280" }}>Home</div>
+          </div>
+          <FlowDot active={isCharging} color="#16A34A" />
+          <div style={{ textAlign: "center" }}>
+            <div style={{ width: 52, height: 52, background: "#16A34A15", border: "1.5px solid #16A34A30", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
+              <Battery size={22} color="#22C55E" />
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#F9FAFB" }}>{s.batteryPct}%</div>
+            <div style={{ fontSize: 10, color: "#6B7280" }}>Battery</div>
+          </div>
+          <FlowDot active={isExporting} color="#F59E0B" />
+          <div style={{ textAlign: "center" }}>
+            <div style={{ width: 52, height: 52, background: isExporting ? "#F59E0B15" : "#ffffff05", border: `1.5px solid ${isExporting ? "#F59E0B30" : "#ffffff10"}`, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
+              <TrendingUp size={22} color={isExporting ? "#F59E0B" : "#374151"} />
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: isExporting ? "#F59E0B" : "#374151" }}>
+              {isExporting ? `${(s.gridW / 1000).toFixed(1)}kW` : "—"}
+            </div>
+            <div style={{ fontSize: 10, color: "#6B7280" }}>{isExporting ? "Exporting" : "Grid"}</div>
+          </div>
         </div>
       </div>
 
@@ -303,22 +237,12 @@ function HomeTab({ devices, connectedDevices, now }: { devices: string[]; connec
 }
 
 // ── PLAN TAB ──────────────────────────────────────────────────────────────
-function PlanTab({ devices }: { devices: string[] }) {
+function PlanTab() {
   const currentSlot = getCurrentSlotIndex();
   const maxPence = Math.max(...AGILE_RATES.map(r => r.pence));
   const minPence = Math.min(...AGILE_RATES.map(r => r.pence));
   const [hovered, setHovered] = useState<number | null>(null);
-  const plan = getPlan(devices);
-  const hasSolar = devices.includes("solar");
-  const hasBattery = devices.includes("battery");
-  const hasEV = devices.includes("ev");
-
-  // Projected value based on stack
-  const projectedValue = hasBattery && hasSolar ? "3.38"
-    : hasBattery ? "2.10"
-    : hasEV ? "1.20"
-    : hasSolar ? "0.90"
-    : "0.00";
+  const projectedValue = calculateSavings();
 
   return (
     <div style={{ padding: "44px 0 0" }}>
@@ -332,12 +256,9 @@ function PlanTab({ devices }: { devices: string[] }) {
         <div style={{ fontSize: 22, fontWeight: 900, color: "#22C55E" }}>+£{projectedValue}</div>
       </div>
 
-      {/* Tomorrow forecast — only show if solar connected */}
-      {hasSolar && (
-        <div style={{ margin: "0 20px" }}>
-          <TomorrowForecast />
-        </div>
-      )}
+      <div style={{ margin: "0 20px" }}>
+        <TomorrowForecast />
+      </div>
 
       {/* Price chart */}
       <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "16px" }}>
@@ -356,14 +277,7 @@ function PlanTab({ devices }: { devices: string[] }) {
           {AGILE_RATES.map((r, i) => (
             <div key={i} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}
               style={{ flex: 1, height: "100%", display: "flex", alignItems: "flex-end", cursor: "pointer" }}>
-              <div style={{
-                width: "100%",
-                height: Math.max(2, (r.pence / maxPence) * 72),
-                background: r.pence === minPence ? "#22C55E" : i === currentSlot ? "#fff" : getBarColor(r.pence),
-                opacity: hovered !== null && hovered !== i ? 0.3 : 1,
-                borderRadius: "2px 2px 0 0",
-                transition: "opacity 0.1s",
-              }} />
+              <div style={{ width: "100%", height: Math.max(2, (r.pence / maxPence) * 72), background: r.pence === minPence ? "#22C55E" : i === currentSlot ? "#fff" : getBarColor(r.pence), opacity: hovered !== null && hovered !== i ? 0.3 : 1, borderRadius: "2px 2px 0 0", transition: "opacity 0.1s" }} />
             </div>
           ))}
         </div>
@@ -380,24 +294,23 @@ function PlanTab({ devices }: { devices: string[] }) {
         </div>
       </div>
 
-      {/* Personalised plan timeline */}
+      {/* Plan timeline */}
       <div style={{ margin: "0 20px" }}>
         <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 12 }}>GRIDLY'S SCHEDULE</div>
-        {plan.map((slot, i) => {
-          const isLast = i === plan.length - 1;
-          const emoji = slot.action === "CHARGE" ? "⚡" : slot.action === "EXPORT" ? "💰" : slot.action === "SOLAR" ? "☀️" : "⏸";
+        {SANDBOX.plan.map((slot, i) => {
+          const isLast = i === SANDBOX.plan.length - 1;
           return (
-            <div key={i} style={{ display: "flex", gap: 14, position: "relative" }}>
+            <div key={i} style={{ display: "flex", gap: 14 }}>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 36, flexShrink: 0 }}>
                 <div style={{ width: 32, height: 32, borderRadius: 10, background: `${slot.color}15`, border: `1.5px solid ${slot.color}30`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
-                  {emoji}
+                  {slot.action === "CHARGE" ? "⚡" : slot.action === "EXPORT" ? "💰" : slot.action === "SOLAR" ? "☀️" : "⏸"}
                 </div>
                 {!isLast && <div style={{ width: 1.5, flex: 1, background: "#1F2937", minHeight: 20 }} />}
               </div>
               <div style={{ flex: 1, paddingBottom: isLast ? 0 : 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                   <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB", marginBottom: 2 }}>{slot.title}</div>
-                  {slot.price > 0 && <div style={{ fontSize: 12, fontWeight: 700, color: slot.color, flexShrink: 0, marginLeft: 8 }}>{slot.price}p</div>}
+                  <div style={{ fontSize: 12, fontWeight: 700, color: slot.color, flexShrink: 0, marginLeft: 8 }}>{slot.price}p</div>
                 </div>
                 <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 2 }}>{slot.reason}</div>
                 <div style={{ fontSize: 10, color: "#374151" }}>{slot.time}</div>
@@ -411,15 +324,29 @@ function PlanTab({ devices }: { devices: string[] }) {
 }
 
 // ── HISTORY TAB ───────────────────────────────────────────────────────────
-function HistoryTab() {
-  const [view, setView] = useState<"saved" | "earned" | "net">("saved");
-  const values = SANDBOX.history.map(d =>
-    view === "saved" ? d.saved : view === "earned" ? d.earned : d.saved + d.earned
-  );
+function HistoryTab({ connectedDevices }: { connectedDevices: typeof ALL_DEVICES }) {
+  const [activeDevice, setActiveDevice] = useState<string>("all");
+
+  const deviceIds = connectedDevices.map(d => d.id);
+
+  // Build values per day based on selected device
+  const values = SANDBOX.history.map(d => {
+    if (activeDevice === "all") return d.solar + d.battery + d.ev + d.grid;
+    return (d as any)[activeDevice] ?? 0;
+  });
+
   const maxVal = Math.max(...values);
-  const total = values.reduce((s, v) => s + v, 0).toFixed(2);
-  const color = view === "saved" ? "#22C55E" : view === "earned" ? "#F59E0B" : "#A78BFA";
-  const weekTotal = SANDBOX.history.reduce((s, d) => s + d.saved + d.earned, 0).toFixed(2);
+  const weekTotal = values.reduce((s, v) => s + v, 0).toFixed(2);
+
+  const activeColor = activeDevice === "all"
+    ? "#22C55E"
+    : ALL_DEVICES.find(d => d.id === activeDevice)?.historyColor ?? "#22C55E";
+
+  // Per device week totals for connected devices only
+  const deviceTotals = connectedDevices.map(device => ({
+    ...device,
+    total: SANDBOX.history.reduce((s, d) => s + ((d as any)[device.id] ?? 0), 0).toFixed(2),
+  }));
 
   return (
     <div style={{ padding: "44px 0 0" }}>
@@ -428,38 +355,56 @@ function HistoryTab() {
         <div style={{ fontSize: 13, color: "#6B7280" }}>Every penny Gridly has made you</div>
       </div>
 
+      {/* All-time */}
       <div style={{ margin: "0 20px 16px", background: "linear-gradient(135deg, #0a0a0a, #111827)", border: "1px solid #1F2937", borderRadius: 20, padding: "24px", textAlign: "center" }}>
         <div style={{ fontSize: 11, color: "#4B5563", letterSpacing: 1, fontWeight: 700, marginBottom: 8 }}>ALL TIME</div>
         <div style={{ fontSize: 52, fontWeight: 900, color: "#22C55E", letterSpacing: -3, lineHeight: 1 }}>+£{SANDBOX.allTime}</div>
         <div style={{ fontSize: 12, color: "#4B5563", marginTop: 8 }}>since {SANDBOX.allTimeSince}</div>
       </div>
 
+      {/* This week chart */}
       <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "16px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div>
             <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>THIS WEEK</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color, letterSpacing: -0.5 }}>
-              £{total}
-              <span style={{ fontSize: 12, color: "#6B7280", fontWeight: 500, marginLeft: 6 }}>{view}</span>
+            <div style={{ fontSize: 22, fontWeight: 800, color: activeColor }}>
+              £{weekTotal}
+              <span style={{ fontSize: 12, color: "#6B7280", fontWeight: 500, marginLeft: 6 }}>
+                {activeDevice === "all" ? "all devices" : ALL_DEVICES.find(d => d.id === activeDevice)?.name}
+              </span>
             </div>
           </div>
-          <div style={{ display: "flex", background: "#111827", borderRadius: 8, padding: 3, gap: 2 }}>
-            {(["saved", "earned", "net"] as const).map(v => (
-              <button key={v} onClick={() => setView(v)} style={{ padding: "5px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontFamily: "inherit", background: view === v ? (v === "saved" ? "#22C55E" : v === "earned" ? "#F59E0B" : "#A78BFA") : "transparent", color: view === v ? "#111827" : "#6B7280", fontSize: 11, fontWeight: 700 }}>
-                {v.charAt(0).toUpperCase() + v.slice(1)}
-              </button>
-            ))}
-          </div>
         </div>
+
+        {/* Device filter pills */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+          <button
+            onClick={() => setActiveDevice("all")}
+            style={{ padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, background: activeDevice === "all" ? "#22C55E" : "#1F2937", color: activeDevice === "all" ? "#111827" : "#6B7280" }}
+          >
+            All
+          </button>
+          {connectedDevices.map(device => (
+            <button
+              key={device.id}
+              onClick={() => setActiveDevice(device.id)}
+              style={{ padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, background: activeDevice === device.id ? device.historyColor : "#1F2937", color: activeDevice === device.id ? "#111827" : "#6B7280" }}
+            >
+              {device.name.split(" ")[0]}
+            </button>
+          ))}
+        </div>
+
+        {/* Bars */}
         <div style={{ display: "flex", gap: 6, alignItems: "flex-end", height: 72, marginBottom: 8 }}>
           {SANDBOX.history.map((d, i) => {
             const val = values[i];
-            const h = Math.max(4, (val / maxVal) * 72);
+            const h = Math.max(4, maxVal > 0 ? (val / maxVal) * 72 : 4);
             const isToday = i === SANDBOX.history.length - 1;
             return (
               <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
-                {isToday && <div style={{ fontSize: 9, color, fontWeight: 700, marginBottom: 2 }}>£{val.toFixed(2)}</div>}
-                <div style={{ width: "100%", height: h, background: isToday ? color : `${color}40`, borderRadius: "3px 3px 0 0" }} />
+                {isToday && <div style={{ fontSize: 9, color: activeColor, fontWeight: 700, marginBottom: 2 }}>£{val.toFixed(2)}</div>}
+                <div style={{ width: "100%", height: h, background: isToday ? activeColor : `${activeColor}40`, borderRadius: "3px 3px 0 0" }} />
               </div>
             );
           })}
@@ -473,20 +418,30 @@ function HistoryTab() {
         </div>
       </div>
 
-      <div style={{ margin: "0 20px", background: "#111827", border: "1px solid #1F2937", borderRadius: 16, padding: "16px 20px", display: "flex", justifyContent: "space-around" }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "#22C55E" }}>£{SANDBOX.history.reduce((s, d) => s + d.saved, 0).toFixed(2)}</div>
-          <div style={{ fontSize: 10, color: "#6B7280", marginTop: 2 }}>saved</div>
-        </div>
-        <div style={{ width: 1, background: "#1F2937" }} />
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "#F59E0B" }}>£{SANDBOX.history.reduce((s, d) => s + d.earned, 0).toFixed(2)}</div>
-          <div style={{ fontSize: 10, color: "#6B7280", marginTop: 2 }}>earned</div>
-        </div>
-        <div style={{ width: 1, background: "#1F2937" }} />
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "#A78BFA" }}>£{weekTotal}</div>
-          <div style={{ fontSize: 10, color: "#6B7280", marginTop: 2 }}>total</div>
+      {/* Per device breakdown — only connected devices */}
+      <div style={{ margin: "0 20px" }}>
+        <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>THIS WEEK BY DEVICE</div>
+        <div style={{ display: "grid", gap: 8 }}>
+          {deviceTotals.map(device => {
+            const Icon = device.icon;
+            const pct = Math.round((parseFloat(device.total) / parseFloat(weekTotal === "0.00" ? "1" : weekTotal)) * 100);
+            return (
+              <div key={device.id} style={{ background: "#111827", borderRadius: 12, padding: "12px 16px", border: "1px solid #1F2937" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <Icon size={15} color={device.color} />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#F9FAFB" }}>{device.name}</span>
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: device.color }}>£{device.total}</div>
+                </div>
+                {/* Progress bar */}
+                <div style={{ height: 3, background: "#1F2937", borderRadius: 2 }}>
+                  <div style={{ height: "100%", width: `${pct}%`, background: device.color, borderRadius: 2, transition: "width 0.4s ease" }} />
+                </div>
+                <div style={{ fontSize: 10, color: "#4B5563", marginTop: 4 }}>{pct}% of total savings</div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -517,16 +472,16 @@ export default function SimplifiedDashboard() {
   const connectedDevices = ALL_DEVICES.filter(d => selectedIds.includes(d.id));
 
   const tabs = [
-    { id: "home", label: "Home", icon: Home },
-    { id: "plan", label: "Plan", icon: Calendar },
+    { id: "home",    label: "Home",    icon: Home },
+    { id: "plan",    label: "Plan",    icon: Calendar },
     { id: "history", label: "History", icon: Clock },
   ] as const;
 
   return (
     <div style={{ background: "#030712", minHeight: "100vh", color: "#F9FAFB", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto", maxWidth: 480, margin: "0 auto", paddingBottom: 80 }}>
-      {tab === "home" && <HomeTab devices={selectedIds} connectedDevices={connectedDevices} now={now} />}
-      {tab === "plan" && <PlanTab devices={selectedIds} />}
-      {tab === "history" && <HistoryTab />}
+      {tab === "home"    && <HomeTab connectedDevices={connectedDevices} now={now} />}
+      {tab === "plan"    && <PlanTab />}
+      {tab === "history" && <HistoryTab connectedDevices={connectedDevices} />}
 
       <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: "#030712", borderTop: "1px solid #111827", padding: "10px 0 20px", display: "flex", justifyContent: "space-around" }}>
         {tabs.map(t => {
