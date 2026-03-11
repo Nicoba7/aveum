@@ -1,32 +1,18 @@
 import { useState, useEffect } from "react";
-import { Sun, Battery, Zap, TrendingUp, ChevronRight, AlertCircle, PoundSterling } from "lucide-react";
+import { Sun, Battery, Zap, Grid3X3, TrendingUp, ChevronRight, AlertCircle, PoundSterling } from "lucide-react";
 
-interface Device {
-  id: string;
-  name: string;
-  connected: boolean;
-  status: string;
-  monthlyValue: number;
-  icon: React.ElementType;
-  color: string;
-}
-
-const ALL_DEVICES: Device[] = [
-  { id: "solar", name: "Solar Inverter", connected: true, status: "2.8kW generating", monthlyValue: 35, icon: Sun, color: "#F59E0B" },
-  { id: "battery", name: "Home Battery", connected: true, status: "62% charged", monthlyValue: 32, icon: Battery, color: "#16A34A" },
-  { id: "ev", name: "EV Charger", connected: false, status: "Not connected", monthlyValue: 26, icon: Zap, color: "#38BDF8" },
+const ALL_DEVICES = [
+  { id: "solar", name: "Solar Inverter", status: "2.8kW generating", monthlyValue: 35, icon: Sun, color: "#F59E0B" },
+  { id: "battery", name: "Home Battery", status: "62% charged", monthlyValue: 32, icon: Battery, color: "#16A34A" },
+  { id: "ev", name: "EV Charger", status: "Connected", monthlyValue: 26, icon: Zap, color: "#38BDF8" },
+  { id: "grid", name: "Smart Meter", status: "Live pricing", monthlyValue: 15, icon: Grid3X3, color: "#A78BFA" },
 ];
 
-// Sandbox data
 const SANDBOX = {
   todaySolarKwh: 12.0,
   todayExportKwh: 4.2,
-  todayImportKwh: 0.8,
-  batteryPct: 62,
-  evPct: 85,
 };
 
-// Realistic Octopus Agile prices (48 x 30-min slots)
 const AGILE_RATES = [
   { time: "00:00", pence: 7.2 }, { time: "00:30", pence: 6.8 },
   { time: "01:00", pence: 6.1 }, { time: "01:30", pence: 5.9 },
@@ -67,17 +53,6 @@ function getBarColor(pence: number) {
   return "#EF4444";
 }
 
-function calcSavings() {
-  const exportEarned = SANDBOX.todayExportKwh * 0.15;
-  const importAvoided = SANDBOX.todaySolarKwh * 0.28;
-  return (exportEarned + importAvoided).toFixed(2);
-}
-
-function calcEarned() {
-  return (SANDBOX.todayExportKwh * 0.15).toFixed(2);
-}
-
-// ── AGILE CHART ───────────────────────────────────────────────────────────
 function AgileChart() {
   const currentSlot = getCurrentSlotIndex();
   const maxPence = Math.max(...AGILE_RATES.map(r => r.pence));
@@ -92,7 +67,7 @@ function AgileChart() {
             Now: <span style={{ color: getBarColor(AGILE_RATES[currentSlot]?.pence), fontWeight: 700 }}>{AGILE_RATES[currentSlot]?.pence}p/kWh</span>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, fontSize: 10, color: "#6B7280" }}>
+        <div style={{ display: "flex", gap: 8, fontSize: 10 }}>
           <span style={{ color: "#22C55E" }}>● cheap</span>
           <span style={{ color: "#F59E0B" }}>● mid</span>
           <span style={{ color: "#EF4444" }}>● peak</span>
@@ -113,7 +88,7 @@ function AgileChart() {
           const color = getBarColor(rate.pence);
           return (
             <div key={i} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}
-              style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%", cursor: "pointer" }}>
+              style={{ flex: 1, display: "flex", alignItems: "flex-end", height: "100%", cursor: "pointer" }}>
               <div style={{ width: "100%", height, background: isCurrent ? "#FFFFFF" : color, opacity: hovered !== null && hovered !== i ? 0.4 : 1, borderRadius: "2px 2px 0 0", transition: "opacity 0.15s ease", boxShadow: isCurrent ? `0 0 6px ${color}` : "none" }} />
             </div>
           );
@@ -131,9 +106,7 @@ function AgileChart() {
   );
 }
 
-// ── MAIN DASHBOARD ────────────────────────────────────────────────────────
 export default function SimplifiedDashboard() {
-  const [devices] = useState(ALL_DEVICES);
   const [now, setNow] = useState(new Date());
 
   useEffect(() => {
@@ -141,13 +114,21 @@ export default function SimplifiedDashboard() {
     return () => clearInterval(t);
   }, []);
 
-  const connectedDevices = devices.filter(d => d.connected);
-  const nextDevice = devices.find(d => !d.connected);
-  const monthlyTotal = connectedDevices.reduce((s, d) => s + d.monthlyValue, 0);
-  const savedToday = calcSavings();
-  const earnedToday = calcEarned();
-  const currentSlot = AGILE_RATES[getCurrentSlotIndex()];
+  // Read selected device IDs from URL param
+  const params = new URLSearchParams(window.location.search);
+  const selectedIds = params.get("devices")?.split(",").filter(Boolean) || ["solar", "battery"];
 
+  const connectedDevices = ALL_DEVICES.filter(d => selectedIds.includes(d.id));
+  const unconnectedDevices = ALL_DEVICES.filter(d => !selectedIds.includes(d.id));
+  const nextDevice = unconnectedDevices[0] || null;
+  const monthlyTotal = connectedDevices.reduce((s, d) => s + d.monthlyValue, 0);
+
+  // Adjust sandbox figures based on what's connected
+  const hasSolar = selectedIds.includes("solar");
+  const savedToday = hasSolar ? (SANDBOX.todayExportKwh * 0.15 + SANDBOX.todaySolarKwh * 0.28).toFixed(2) : "0.00";
+  const earnedToday = hasSolar ? (SANDBOX.todayExportKwh * 0.15).toFixed(2) : "0.00";
+
+  const currentSlot = AGILE_RATES[getCurrentSlotIndex()];
   const hour = now.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
@@ -157,28 +138,26 @@ export default function SimplifiedDashboard() {
       {/* Header */}
       <div style={{ padding: "48px 20px 16px" }}>
         <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5 }}>{greeting} 👋</div>
-        <div style={{ fontSize: 13, color: "#9CA3AF", marginTop: 2 }}>Here's how you're doing today</div>
+        <div style={{ fontSize: 13, color: "#9CA3AF", marginTop: 2 }}>
+          {connectedDevices.length} device{connectedDevices.length !== 1 ? "s" : ""} connected · optimising now
+        </div>
       </div>
 
       {/* Saved + Earned hero */}
       <div style={{ margin: "0 20px 16px", background: "linear-gradient(135deg, #0D1F14 0%, #071510 100%)", border: "1px solid #16A34A40", borderRadius: 20, padding: "22px 20px" }}>
         <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
-          {/* Saved */}
           <div style={{ flex: 1, textAlign: "center" }}>
             <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 4 }}>Saved today</div>
             <div style={{ fontSize: 36, fontWeight: 800, color: "#22C55E", letterSpacing: -1, lineHeight: 1 }}>£{savedToday}</div>
-            <div style={{ fontSize: 10, color: "#4B5563", marginTop: 4 }}>{SANDBOX.todaySolarKwh} kWh solar</div>
+            <div style={{ fontSize: 10, color: "#4B5563", marginTop: 4 }}>{hasSolar ? `${SANDBOX.todaySolarKwh} kWh solar` : "No solar connected"}</div>
           </div>
           <div style={{ width: 1, background: "#1F2937" }} />
-          {/* Earned */}
           <div style={{ flex: 1, textAlign: "center" }}>
             <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 4 }}>Earned today</div>
             <div style={{ fontSize: 36, fontWeight: 800, color: "#F59E0B", letterSpacing: -1, lineHeight: 1 }}>£{earnedToday}</div>
-            <div style={{ fontSize: 10, color: "#4B5563", marginTop: 4 }}>{SANDBOX.todayExportKwh} kWh exported</div>
+            <div style={{ fontSize: 10, color: "#4B5563", marginTop: 4 }}>{hasSolar ? `${SANDBOX.todayExportKwh} kWh exported` : "Connect solar to earn"}</div>
           </div>
         </div>
-
-        {/* Monthly + Annual */}
         <div style={{ borderTop: "1px solid #1F2937", paddingTop: 14, display: "flex", gap: 16, justifyContent: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <PoundSterling size={13} color="#16A34A" />
@@ -255,9 +234,7 @@ export default function SimplifiedDashboard() {
         </div>
       )}
 
-      <div style={{ textAlign: "center", marginTop: 24, fontSize: 10, color: "#374151" }}>
-        Gridly · Live
-      </div>
+      <div style={{ textAlign: "center", marginTop: 24, fontSize: 10, color: "#374151" }}>Gridly · Live</div>
     </div>
   );
 }
