@@ -334,7 +334,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
           }}>Back</button>
         )}
         <button
-          onClick={step === 3 ? () => onComplete?.(selected, { octopusCreds, solarCreds, evCreds }) : () => setStep(step + 1)}
+          onClick={step === 3 ? () => window.location.href = '/dashboard' : () => setStep(step + 1)}
           disabled={step === 1 && selected.length === 0}
           style={{
             flex: 1, border: "none", borderRadius: 10, padding: "13px 16px",
