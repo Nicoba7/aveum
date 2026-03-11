@@ -12,12 +12,54 @@ interface Device {
 }
 
 const DEVICES: Device[] = [
-  { id: "solar", name: "Solar Inverter", icon: Sun, color: "#F59E0B", description: "Solar panels & inverter", saves: "420" },
-  { id: "battery", name: "Home Battery", icon: Battery, color: "#16A34A", description: "Battery storage system", saves: "380" },
-  { id: "ev", name: "EV Charger", icon: Zap, color: "#38BDF8", description: "Electric vehicle charger", saves: "310" },
-  { id: "grid", name: "Smart Meter / Octopus", icon: Grid3X3, color: "#A78BFA", description: "Grid connection & pricing", saves: "180" },
+  { id: "solar",   name: "Solar Inverter",       icon: Sun,      color: "#F59E0B", description: "Solar panels & inverter",      saves: "420" },
+  { id: "battery", name: "Home Battery",          icon: Battery,  color: "#16A34A", description: "Battery storage system",       saves: "380" },
+  { id: "ev",      name: "EV Charger",            icon: Zap,      color: "#38BDF8", description: "Electric vehicle charger",     saves: "310" },
+  { id: "grid",    name: "Smart Meter / Octopus", icon: Grid3X3,  color: "#A78BFA", description: "Grid connection & pricing",    saves: "180" },
 ];
 
+const EV_BRANDS = [
+  {
+    id: "zappi",
+    name: "Zappi",
+    description: "by myenergi",
+    fields: [
+      { key: "email",    label: "MYENERGI EMAIL",    placeholder: "you@example.com",  secret: false, hint: "Your myenergi account email" },
+      { key: "password", label: "MYENERGI PASSWORD", placeholder: "••••••••",         secret: true  },
+      { key: "serial",   label: "ZAPPI SERIAL",      placeholder: "XXXXXXXXXX",       secret: false, hint: "Printed on the front of your Zappi unit" },
+    ],
+  },
+  {
+    id: "ohme",
+    name: "Ohme",
+    description: "Home / Home Pro / ePod",
+    fields: [
+      { key: "email",    label: "OHME EMAIL",    placeholder: "you@example.com", secret: false, hint: "Your Ohme account email" },
+      { key: "password", label: "OHME PASSWORD", placeholder: "••••••••",        secret: true  },
+    ],
+  },
+  {
+    id: "hypervolt",
+    name: "Hypervolt",
+    description: "Home 3 / Plus",
+    fields: [
+      { key: "apiKey",     label: "API KEY",     placeholder: "hv_xxxxxxxxxxxx",  secret: true,  hint: "Hypervolt app → Settings → API access" },
+      { key: "chargerId",  label: "CHARGER ID",  placeholder: "XXXXXXXXXXXX",     secret: false, hint: "Found in the Hypervolt app under your charger" },
+    ],
+  },
+  {
+    id: "wallbox",
+    name: "Wallbox",
+    description: "Pulsar / Commander / Copper",
+    fields: [
+      { key: "email",     label: "WALLBOX EMAIL",     placeholder: "you@example.com", secret: false, hint: "Your myWallbox account email" },
+      { key: "password",  label: "WALLBOX PASSWORD",  placeholder: "••••••••",        secret: true  },
+      { key: "chargerId", label: "CHARGER ID",        placeholder: "XXXXXXXXXX",      secret: false, hint: "myWallbox app → Charger settings → Serial number" },
+    ],
+  },
+];
+
+// ── FIELD COMPONENT ───────────────────────────────────────────────────────
 function Field({ label, placeholder, hint, link, value, onChange, secret }: {
   label: string; placeholder: string; hint?: string; link?: { text: string; url: string };
   value: string; onChange: (v: string) => void; secret?: boolean;
@@ -48,6 +90,7 @@ function Field({ label, placeholder, hint, link, value, onChange, secret }: {
   );
 }
 
+// ── OCTOPUS FORM ──────────────────────────────────────────────────────────
 function OctopusForm({ creds, setCreds }: { creds: any; setCreds: any }) {
   return (
     <div style={{ marginBottom: 20 }}>
@@ -61,6 +104,7 @@ function OctopusForm({ creds, setCreds }: { creds: any; setCreds: any }) {
   );
 }
 
+// ── SOLAR / BATTERY FORM ──────────────────────────────────────────────────
 function SolarBatteryForm({ creds, setCreds }: { creds: any; setCreds: any }) {
   return (
     <div style={{ marginBottom: 20 }}>
@@ -74,20 +118,65 @@ function SolarBatteryForm({ creds, setCreds }: { creds: any; setCreds: any }) {
   );
 }
 
+// ── EV FORM — brand selector + dynamic fields ─────────────────────────────
 function EVForm({ creds, setCreds }: { creds: any; setCreds: any }) {
+  const [brand, setBrand] = useState<string>(creds.brand || "");
+
+  const selectedBrand = EV_BRANDS.find(b => b.id === brand);
+
+  const handleBrandSelect = (id: string) => {
+    setBrand(id);
+    setCreds((c: any) => ({ brand: id })); // reset fields on brand change
+  };
+
   return (
     <div style={{ marginBottom: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
         <Zap size={16} color="#38BDF8" />
-        <span style={{ fontSize: 13, fontWeight: 700, color: "#F9FAFB" }}>EV Charger (Zappi)</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#F9FAFB" }}>EV Charger</span>
       </div>
-      <Field label="MYENERGI EMAIL" placeholder="you@example.com" value={creds.email} onChange={v => setCreds((c: any) => ({ ...c, email: v }))} />
-      <Field label="MYENERGI PASSWORD" placeholder="••••••••" value={creds.password} onChange={v => setCreds((c: any) => ({ ...c, password: v }))} secret />
-      <Field label="ZAPPI SERIAL NUMBER" placeholder="XXXXXXXXXX" hint="Printed on the front of your Zappi unit" value={creds.serial} onChange={v => setCreds((c: any) => ({ ...c, serial: v }))} />
+
+      {/* Brand selector */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF", marginBottom: 8, letterSpacing: 0.5 }}>SELECT YOUR CHARGER BRAND</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+        {EV_BRANDS.map(b => (
+          <button
+            key={b.id}
+            onClick={() => handleBrandSelect(b.id)}
+            style={{
+              background: brand === b.id ? "#38BDF820" : "#111827",
+              border: `2px solid ${brand === b.id ? "#38BDF8" : "#374151"}`,
+              borderRadius: 10, padding: "10px 12px", cursor: "pointer",
+              textAlign: "left", fontFamily: "inherit", transition: "all 0.15s ease",
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700, color: brand === b.id ? "#38BDF8" : "#F9FAFB", marginBottom: 2 }}>{b.name}</div>
+            <div style={{ fontSize: 10, color: "#6B7280" }}>{b.description}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Dynamic fields for selected brand */}
+      {selectedBrand && (
+        <div>
+          {selectedBrand.fields.map(field => (
+            <Field
+              key={field.key}
+              label={field.label}
+              placeholder={field.placeholder}
+              hint={field.hint}
+              secret={field.secret}
+              value={creds[field.key] || ""}
+              onChange={v => setCreds((c: any) => ({ ...c, [field.key]: v }))}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
+// ── MAIN ──────────────────────────────────────────────────────────────────
 interface OnboardingProps {
   onComplete?: (devices: string[], creds: any) => void;
 }
@@ -98,7 +187,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const [selected, setSelected] = useState<string[]>([]);
   const [octopusCreds, setOctopusCreds] = useState({ apiKey: "", accountNumber: "" });
   const [solarCreds, setSolarCreds] = useState({ apiKey: "", serial: "" });
-  const [evCreds, setEvCreds] = useState({ email: "", password: "", serial: "" });
+  const [evCreds, setEvCreds] = useState<any>({ brand: "" });
 
   const toggleDevice = (id: string) => {
     setSelected(prev => prev.includes(id) ? prev.filter(d => d !== id) : [...prev, id]);
@@ -130,12 +219,14 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         </p>
       </div>
 
+      {/* Progress bar */}
       <div style={{ marginBottom: 28, display: "flex", gap: 6 }}>
         {[1, 2, 3].map(s => (
           <div key={s} style={{ height: 3, flex: 1, background: s <= step ? "#22C55E" : "#1F2937", borderRadius: 2, transition: "background 0.3s ease" }} />
         ))}
       </div>
 
+      {/* Step 1 — device selection */}
       {step === 1 && (
         <div style={{ flex: 1, marginBottom: 20 }}>
           <div style={{ display: "grid", gap: 10 }}>
@@ -168,6 +259,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         </div>
       )}
 
+      {/* Step 2 — credentials */}
       {step === 2 && (
         <div style={{ flex: 1, marginBottom: 20 }}>
           <div style={{ background: "#0F1929", border: "1px solid #1E3A5F", borderRadius: 10, padding: "10px 14px", marginBottom: 20, display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -183,6 +275,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         </div>
       )}
 
+      {/* Step 3 — complete */}
       {step === 3 && (
         <div style={{ flex: 1, marginBottom: 20, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
           <div style={{ width: 72, height: 72, background: "#16A34A20", borderRadius: 16, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20 }}>
@@ -196,7 +289,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
             <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 4 }}>Annual value unlocked</div>
             <div style={{ fontSize: 36, fontWeight: 800, color: "#22C55E", letterSpacing: -1 }}>£{totalSavings}</div>
             <div style={{ height: 6, background: "#1F2937", borderRadius: 99, marginTop: 12, overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${(totalSavings / 1400) * 100}%`, background: "#22C55E", borderRadius: 99 }} />
+              <div style={{ height: "100%", width: `${Math.min((totalSavings / 1400) * 100, 100)}%`, background: "#22C55E", borderRadius: 99 }} />
             </div>
             <div style={{ fontSize: 10, color: "#4B5563", marginTop: 4 }}>of £1,400 maximum</div>
           </div>
@@ -209,6 +302,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
         </div>
       )}
 
+      {/* Navigation */}
       <div style={{ display: "flex", gap: 10, paddingBottom: 20 }}>
         {step > 1 && (
           <button onClick={() => setStep(step - 1)} style={{ flex: 1, background: "#1F2937", border: "1px solid #374151", borderRadius: 10, padding: "13px 16px", color: "#F9FAFB", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Back</button>
