@@ -229,7 +229,7 @@ function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVIC
           })}
         </div>
         <button
-          onClick={() => window.location.href = '/onboarding'}
+          onClick={() => window.location.assign('/onboarding')}
           style={{ width: "100%", marginTop: 10, background: "none", border: "1px dashed #374151", borderRadius: 12, padding: "12px 16px", color: "#4B5563", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
         >
           + Add another device
