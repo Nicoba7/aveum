@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import { useState, useEffect, useMemo } from "react";
 import { Sun, Battery, Zap, Grid3X3, TrendingUp, Home, Calendar, Clock } from "lucide-react";
 import TomorrowForecast from "./TomorrowForecast";
@@ -122,6 +123,7 @@ function FlowDot({ active, color }: { active: boolean; color: string }) {
 
 // ── HOME TAB ──────────────────────────────────────────────────────────────
 function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVICES; now: Date }) {
+  const navigate = useNavigate();
   const hour = now.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const slotIndex = getCurrentSlotIndex();
