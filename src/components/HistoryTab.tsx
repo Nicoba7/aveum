@@ -13,7 +13,7 @@ function ChargeSessionHistory() {
     <div style={{ background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, overflow: "hidden" }}>
       <div style={{ padding: "14px 16px", borderBottom: "1px solid #1F2937", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <div style={{ fontSize: 11, color: "#38BDF8", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>CHARGE SESSIONS</div>
+          <div style={{ fontSize: 11, color: "#38BDF8", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>EV CHARGING SESSIONS</div>
           <div style={{ fontSize: 13, color: "#9CA3AF" }}>{totalKwh} kWh · £{totalCost} last 10 sessions</div>
         </div>
         <button
@@ -84,15 +84,6 @@ export default function HistoryTab({
     );
   }
 
-
-  if (history.length === 0) {
-    return (
-      <div style={{ padding: "44px 24px 0", color: "#9CA3AF" }}>
-        History data is temporarily unavailable.
-      </div>
-    );
-  }
-
   const values = history.map(d => {
     if (activeDevice === "all") return d.solar + d.battery + d.ev + d.grid;
     return (d as any)[activeDevice] ?? 0;
@@ -112,7 +103,6 @@ export default function HistoryTab({
       .reduce((s, d) => s + ((d as any)[device.id] ?? 0), 0)
       .toFixed(2),
   }));
-
 
   const weeklySummary = {
     weekTotal,
@@ -159,6 +149,7 @@ export default function HistoryTab({
       setShareStatus("Share cancelled");
     }
   };
+
   return (
     <div style={{ padding: "44px 0 0" }}>
       <div style={{ padding: "0 24px 20px" }}>
@@ -176,7 +167,7 @@ export default function HistoryTab({
 
       <div style={{ margin: "0 20px 16px", background: "linear-gradient(135deg, #0a0a0a, #111827)", border: "1px solid #1F2937", borderRadius: 20, padding: "24px", textAlign: "center" }}>
         <div style={{ fontSize: 11, color: "#4B5563", letterSpacing: 1, fontWeight: 700, marginBottom: 8 }}>
-          ALL TIME
+          ALL TIME SAVINGS
         </div>
         <div style={{ fontSize: 52, fontWeight: 900, color: "#22C55E", letterSpacing: -3, lineHeight: 1 }}>
           +£{SANDBOX.allTime}
@@ -288,14 +279,14 @@ export default function HistoryTab({
 
       <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "16px" }}>
         <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 8 }}>
-          WEEKLY REPORT
+          SHARE YOUR WINS
         </div>
         <div style={{ fontSize: 13, color: "#D1D5DB", marginBottom: 10 }}>
           {weeklySummaryText}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={copyWeeklySummary} style={{ background: "#1F2937", border: "none", borderRadius: 8, padding: "8px 10px", color: "#E5E7EB", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Copy summary</button>
-          <button onClick={exportWeeklyReport} style={{ background: "#1F2937", border: "none", borderRadius: 8, padding: "8px 10px", color: "#E5E7EB", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Export JSON</button>
+          <button onClick={exportWeeklyReport} style={{ background: "#1F2937", border: "none", borderRadius: 8, padding: "8px 10px", color: "#E5E7EB", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Export CSV</button>
           <button onClick={shareWeeklySummary} style={{ background: "#1F2937", border: "none", borderRadius: 8, padding: "8px 10px", color: "#E5E7EB", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Share</button>
         </div>
         {shareStatus && <div style={{ marginTop: 8, fontSize: 11, color: "#9CA3AF" }}>{shareStatus}</div>}
@@ -303,7 +294,7 @@ export default function HistoryTab({
 
       <div style={{ margin: "0 20px" }}>
         <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>
-          THIS WEEK BY DEVICE
+          BREAKDOWN BY DEVICE
         </div>
         <div style={{ display: "grid", gap: 8 }}>
           {deviceTotals.map(device => {
@@ -339,7 +330,7 @@ export default function HistoryTab({
                 </div>
 
                 <div style={{ fontSize: 10, color: "#4B5563", marginTop: 4 }}>
-                  {pct}% of total savings
+                  {pct}% of this week's savings
                 </div>
               </div>
             );
