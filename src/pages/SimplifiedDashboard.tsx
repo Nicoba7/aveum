@@ -729,15 +729,53 @@ function ChargerLock({ connectedDevices }: { connectedDevices: typeof ALL_DEVICE
 
   return (
     <div style={{ margin: "0 20px 16px" }}>
-      <button onClick={() => setLocked(l => !l)} style={{ width: "100%", background: locked ? "#1A0A0A" : "#111827", border: `1px solid ${locked ? "#EF444430" : "#1F2937"}`, borderRadius: 14, padding: "12px 16px", cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <button
+        onClick={() => setLocked(l => !l)}
+        style={{
+          width: "100%",
+          background: locked ? "#1A0A0A" : "#111827",
+          border: `1px solid ${locked ? "#EF444430" : "#1F2937"}`,
+          borderRadius: 14,
+          padding: "12px 16px",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center"
+        }}
+      >
         <div style={{ textAlign: "left" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: locked ? "#FCA5A5" : "#9CA3AF", marginBottom: 2 }}>
             {locked ? "🔒 Charger locked" : "🔓 Charger unlocked"}
           </div>
-          <div style={{ fontSize: 11, color: "#4B5563" }}>{locked ? "No one can start a charge without Gridly" : "Tap to lock your charger remotely"}</div>
+          <div style={{ fontSize: 11, color: "#4B5563" }}>
+            {locked ? "No one can start a charge without Gridly" : "Tap to lock your charger remotely"}
+          </div>
         </div>
-        <div style={{ width: 36, height: 20, background: locked ? "#EF4444" : "#374151", borderRadius: 99, position: "relative", flexShrink: 0, transition: "background 0.2s" }}>
-          <div style={{ position: "absolute", top: 2, left: locked ? 18 : 2, width: 16, height: 16, background: "#F9FAFB", borderRadius: "50%", transition: "left 0.2s" }} />
+
+        <div
+          style={{
+            width: 36,
+            height: 20,
+            background: locked ? "#EF4444" : "#374151",
+            borderRadius: 99,
+            position: "relative",
+            flexShrink: 0,
+            transition: "background 0.2s"
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              top: 2,
+              left: locked ? 18 : 2,
+              width: 16,
+              height: 16,
+              background: "#F9FAFB",
+              borderRadius: "50%",
+              transition: "left 0.2s"
+            }}
+          />
         </div>
       </button>
     </div>
