@@ -83,7 +83,7 @@ export function buildGridlyPlan(
       reason: "Cheap rate — best price of the night",
       price: cheapest.pence,
       color: "#22C55E",
-       hasBattery ? ["battery"] : [],
+      requires: hasBattery ? ["battery"] : [],
       highlight: true,
     },
     {
