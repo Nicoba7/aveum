@@ -1,18 +1,8 @@
 import { useState } from "react";
 import TomorrowForecast from "../pages/TomorrowForecast";
-import { AGILE_RATES } from "../data/agileRates";
-import { SANDBOX } from "../data/sandbox";
+import { AGILE_RATES, SANDBOX, DeviceConfig } from "../pages/SimplifiedDashboard";
 import { buildGridlyPlan } from "../lib/gridlyPlan";
 
-type Device = {
-  id: string;
-  name: string;
-  status: string;
-  monthlyValue: number;
-  icon: any;
-  color: string;
-  historyColor: string;
-};
 
 function getCurrentSlotIndex() {
   const now = new Date();
@@ -26,7 +16,7 @@ function getBarColor(p: number) {
   return "#EF4444";
 }
 
-export default function PlanTab({ connectedDevices }: { connectedDevices: Device[] }) {
+export default function PlanTab({ connectedDevices }: { connectedDevices: DeviceConfig[] }) {
   const currentSlot = getCurrentSlotIndex();
   const maxPence = Math.max(...AGILE_RATES.map(r => r.pence));
   const minPence = Math.min(...AGILE_RATES.map(r => r.pence));
