@@ -1,114 +1,99 @@
+import { buildGridlyPlan } from "../lib/gridlyPlan";
 import { Battery, TrendingUp, Zap, Moon, Sun, Pause } from "lucide-react";
 
-// ── PLAN DATA (swap for real engine output later) ─────────────────────────
-const PLAN = [
-  {
-    time: "11:30pm",
-    action: "CHARGE",
-    title: "Charging your battery",
-    reason: "Cheap rate — best price of the night",
-    price: 4.8,
-    color: "#22C55E",
-    icon: Battery,
-    highlight: true,
-  },
-  {
-    time: "2:00am",
-    action: "HOLD",
-    title: "Battery full, resting",
-    reason: "Holding until morning — nothing to do",
-    price: 5.1,
-    color: "#6B7280",
-    icon: Moon,
-    highlight: false,
-  },
-  {
-    time: "6:00am",
-    action: "HOLD",
-    title: "Morning peak coming",
-    reason: "Keeping battery ready to power your home",
-    price: 12.4,
-    color: "#6B7280",
-    icon: Pause,
-    highlight: false,
-  },
-  {
-    time: "8:00am",
-    action: "EXPORT",
-    title: "Selling to the grid",
-    reason: "Price is high — earning 31p for every unit sold",
-    price: 31.2,
-    color: "#F59E0B",
-    icon: TrendingUp,
-    highlight: true,
-  },
-  {
-    time: "11:00am",
-    action: "SOLAR",
-    title: "Solar taking over",
-    reason: "Sun is generating — powering your home for free",
-    price: 9.6,
-    color: "#F59E0B",
-    icon: Sun,
-    highlight: false,
-  },
-  {
-    time: "5:30pm",
-    action: "EXPORT",
-    title: "Peak earnings window",
-    reason: "Best price of the day — selling everything you have",
-    price: 38.6,
-    color: "#F59E0B",
-    icon: TrendingUp,
-    highlight: true,
-  },
-  {
-    time: "8:00pm",
-    action: "CHARGE",
-    title: "Topping up for tomorrow",
-    reason: "Price dropping — refilling ready for the morning",
-    price: 11.8,
-    color: "#22C55E",
-    icon: Battery,
-    highlight: false,
-  },
-];
-
-// ── SUMMARY STATS ─────────────────────────────────────────────────────────
-const SUMMARY = {
-  projectedEarnings: 2.84,
-  projectedSavings: 1.92,
-  cheapestSlot: "11:30pm",
-  cheapestPrice: 4.8,
-  peakSlot: "5:30pm",
-  peakPrice: 38.6,
-};
-
-function getActionLabel(action: string) {
-  switch (action) {
-    case "CHARGE": return "Charging";
-    case "EXPORT": return "Selling";
-    case "HOLD": return "Resting";
-    case "SOLAR": return "Solar";
-    default: return action;
-  }
-}
-
-function getActionBg(action: string) {
-  switch (action) {
-    case "CHARGE": return { bg: "#16A34A20", border: "#22C55E40", badge: "#16A34A", badgeText: "#22C55E" };
-    case "EXPORT": return { bg: "#92400E20", border: "#F59E0B40", badge: "#92400E", badgeText: "#F59E0B" };
-    case "HOLD": return { bg: "#11182720", border: "#37415140", badge: "#374151", badgeText: "#9CA3AF" };
-    case "SOLAR": return { bg: "#92400E15", border: "#F59E0B30", badge: "#78350F", badgeText: "#FCD34D" };
-    default: return { bg: "#11182720", border: "#37415140", badge: "#374151", badgeText: "#9CA3AF" };
-  }
-}
-
 export default function NightlyPlan() {
-  const net = (SUMMARY.projectedEarnings + SUMMARY.projectedSavings).toFixed(2);
+
+  const rates = [
+    { time: "00:00", pence: 7.2 }, { time: "00:30", pence: 6.8 },
+    { time: "01:00", pence: 6.1 }, { time: "01:30", pence: 5.9 },
+    { time: "02:00", pence: 5.4 }, { time: "02:30", pence: 5.1 },
+    { time: "03:00", pence: 4.8 }, { time: "03:30", pence: 4.6 },
+    { time: "04:00", pence: 4.9 }, { time: "04:30", pence: 5.3 },
+    { time: "05:00", pence: 6.2 }, { time: "05:30", pence: 8.1 },
+    { time: "06:00", pence: 12.4 }, { time: "06:30", pence: 18.7 },
+    { time: "07:00", pence: 24.3 }, { time: "07:30", pence: 28.9 },
+    { time: "08:00", pence: 31.2 }, { time: "08:30", pence: 29.4 },
+    { time: "09:00", pence: 24.1 }, { time: "09:30", pence: 19.8 },
+    { time: "10:00", pence: 16.2 }, { time: "10:30", pence: 13.4 },
+    { time: "11:00", pence: 11.8 }, { time: "11:30", pence: 10.2 },
+    { time: "12:00", pence: 9.6 }, { time: "12:30", pence: 8.9 },
+    { time: "13:00", pence: 9.1 }, { time: "13:30", pence: 10.4 },
+    { time: "14:00", pence: 11.2 }, { time: "14:30", pence: 12.8 },
+    { time: "15:00", pence: 14.6 }, { time: "15:30", pence: 17.3 },
+    { time: "16:00", pence: 22.1 }, { time: "16:30", pence: 27.8 },
+    { time: "17:00", pence: 34.2 }, { time: "17:30", pence: 38.6 },
+    { time: "18:00", pence: 35.4 }, { time: "18:30", pence: 29.7 },
+    { time: "19:00", pence: 22.3 }, { time: "19:30", pence: 17.6 },
+    { time: "20:00", pence: 14.2 }, { time: "20:30", pence: 11.8 },
+    { time: "21:00", pence: 10.1 }, { time: "21:30", pence: 9.4 },
+    { time: "22:00", pence: 8.7 }, { time: "22:30", pence: 8.1 },
+    { time: "23:00", pence: 7.6 }, { time: "23:30", pence: 7.1 },
+  ];
+
+  const { plan, summary } = buildGridlyPlan(
+    rates,
+    ["solar", "battery", "ev", "grid"],
+    18.4
+  );
+
+  const net = (summary.projectedEarnings + summary.projectedSavings).toFixed(2);
+
+  const iconMap = {
+    CHARGE: Battery,
+    EXPORT: TrendingUp,
+    HOLD: Pause,
+    SOLAR: Sun,
+  };
 
   return (
     <div style={{ background: "#0D1117", border: "1px solid #1F2937", borderRadius: 12, padding: "16px", marginBottom: 16 }}>
+
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#6B7280" }}>
+            GRIDLY'S PLAN FOR TONIGHT
+          </div>
+          <div style={{ fontSize: 13, color: "#9CA3AF" }}>
+            Already sorted — nothing you need to do
+          </div>
+        </div>
+
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 11, color: "#6B7280" }}>Projected value</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "#22C55E" }}>
+            +£{net}
+          </div>
+        </div>
+      </div>
+
+      {/* Timeline */}
+      <div>
+        {plan.map((slot, i) => {
+          const Icon = iconMap[slot.action];
+
+          return (
+            <div key={i} style={{ display: "flex", gap: 12, marginBottom: 12 }}>
+              <Icon size={16} color={slot.color} />
+
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700 }}>{slot.title}</div>
+                <div style={{ fontSize: 12, color: "#6B7280" }}>
+                  {slot.reason}
+                </div>
+              </div>
+
+              <div style={{ fontWeight: 700, color: slot.color }}>
+                {slot.price}p
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+    </div>
+  );
+}
 
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
