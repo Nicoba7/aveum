@@ -22,11 +22,23 @@ export default function PlanTab({ connectedDevices }: { connectedDevices: Device
   const minPence = Math.min(...AGILE_RATES.map(r => r.pence));
   const [hovered, setHovered] = useState<number | null>(null);
 
+
+  const hasRates = Array.isArray(AGILE_RATES) && AGILE_RATES.length > 0;
+  const forecastKwh = SANDBOX?.solarForecast?.kwh ?? 0;
+
+  if (!hasRates) {
+    return (
+      <div style={{ padding: "44px 24px 0", color: "#9CA3AF" }}>
+        Plan data is temporarily unavailable.
+      </div>
+    );
+  }
+
   const connectedDeviceIds = connectedDevices.map(d => d.id) as ("solar" | "battery" | "ev" | "grid")[];
   const { plan, summary } = buildGridlyPlan(
     AGILE_RATES,
     connectedDeviceIds,
-    SANDBOX.solarForecast.kwh
+    forecastKwh
   );
   const projectedValue = (summary.projectedEarnings + summary.projectedSavings).toFixed(2);
 

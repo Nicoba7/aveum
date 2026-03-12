@@ -73,7 +73,18 @@ export default function HistoryTab({
 }) {
   const [activeDevice, setActiveDevice] = useState<string>("all");
 
-  const values = SANDBOX.history.map(d => {
+
+  const history = Array.isArray(SANDBOX?.history) ? SANDBOX.history : [];
+
+  if (history.length === 0) {
+    return (
+      <div style={{ padding: "44px 24px 0", color: "#9CA3AF" }}>
+        History data is temporarily unavailable.
+      </div>
+    );
+  }
+
+  const values = history.map(d => {
     if (activeDevice === "all") return d.solar + d.battery + d.ev + d.grid;
     return (d as any)[activeDevice] ?? 0;
   });
@@ -88,7 +99,7 @@ export default function HistoryTab({
 
   const deviceTotals = connectedDevices.map(device => ({
     ...device,
-    total: SANDBOX.history
+    total: history
       .reduce((s, d) => s + ((d as any)[device.id] ?? 0), 0)
       .toFixed(2),
   }));
@@ -177,10 +188,10 @@ export default function HistoryTab({
         </div>
 
         <div style={{ display: "flex", gap: 6, alignItems: "flex-end", height: 72, marginBottom: 8 }}>
-          {SANDBOX.history.map((d, i) => {
+          {history.map((d, i) => {
             const val = values[i];
             const h = Math.max(4, maxVal > 0 ? (val / maxVal) * 72 : 4);
-            const isToday = i === SANDBOX.history.length - 1;
+            const isToday = i === history.length - 1;
 
             return (
               <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
@@ -203,18 +214,18 @@ export default function HistoryTab({
         </div>
 
         <div style={{ display: "flex", gap: 6 }}>
-          {SANDBOX.history.map((d, i) => (
+          {history.map((d, i) => (
             <div
               key={i}
               style={{
                 flex: 1,
                 textAlign: "center",
                 fontSize: 10,
-                color: i === SANDBOX.history.length - 1 ? "#F9FAFB" : "#4B5563",
-                fontWeight: i === SANDBOX.history.length - 1 ? 700 : 400,
+                color: i === history.length - 1 ? "#F9FAFB" : "#4B5563",
+                fontWeight: i === history.length - 1 ? 700 : 400,
               }}
             >
-              {i === SANDBOX.history.length - 1 ? "Today" : d.day}
+              {i === history.length - 1 ? "Today" : d.day}
             </div>
           ))}
         </div>
