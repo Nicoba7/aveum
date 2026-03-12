@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Sun, Battery, Zap, Grid3X3, TrendingUp, Home, Calendar, Clock } from "lucide-react";
+import { Sun, Battery, Zap, Grid3X3, TrendingUp, Home, Calendar, Clock, ChevronDown, ChevronUp } from "lucide-react";
 import TomorrowForecast from "./TomorrowForecast";
 
 // ── DEVICE CONFIG ─────────────────────────────────────────────────────────
@@ -17,6 +17,7 @@ const SANDBOX = {
   allTime: 713.67,
   allTimeSince: "March 2024",
   solar: { w: 2840, batteryPct: 62, gridW: 420, homeW: 1200 },
+  solarForecast: { kwh: 18.4, confidence: 82, condition: "Mostly sunny", icon: "🌤️", deltaKwh: 2.1 },
   history: [
     { day: "Mon", solar: 1.24, battery: 0.98, ev: 0.63, grid: 0.18 },
     { day: "Tue", solar: 2.11, battery: 1.42, ev: 1.21, grid: 0.31 },
@@ -28,11 +29,11 @@ const SANDBOX = {
   ],
   plan: [
     { time: "11:30pm", action: "CHARGE", title: "Charging your battery",    reason: "Cheapest rate of the night",        price: 4.8,  color: "#22C55E", requires: ["battery"] },
-    { time: "2:00am",  action: "HOLD",   title: "Resting overnight",        reason: "Nothing to do — holding steady",    price: 5.1,  color: "#6B7280", requires: [] },
-    { time: "8:00am",  action: "EXPORT", title: "Selling to the grid",      reason: "High price — earning for you",      price: 31.2, color: "#F59E0B", requires: ["battery", "grid"] },
-    { time: "11:00am", action: "SOLAR",  title: "Solar powering your home", reason: "Free electricity from your panels", price: 9.6,  color: "#F59E0B", requires: ["solar"] },
-    { time: "5:30pm",  action: "EXPORT", title: "Peak earnings window",     reason: "Best price of the day",             price: 38.6, color: "#F59E0B", requires: ["battery", "grid"] },
-    { time: "8:00pm",  action: "CHARGE", title: "Topping up for tomorrow",  reason: "Price dropping — refilling now",    price: 11.8, color: "#22C55E", requires: ["battery"] },
+    { time: "2:00am",  action: "HOLD",   title: "Resting overnight",        reason: "Nothing to do — holding steady",   price: 5.1,  color: "#6B7280", requires: [] },
+    { time: "8:00am",  action: "EXPORT", title: "Selling to the grid",      reason: "High price — earning for you",     price: 31.2, color: "#F59E0B", requires: ["battery", "grid"] },
+    { time: "11:00am", action: "SOLAR",  title: "Solar powering your home", reason: "Free electricity from your panels",price: 9.6,  color: "#F59E0B", requires: ["solar"] },
+    { time: "5:30pm",  action: "EXPORT", title: "Peak earnings window",     reason: "Best price of the day",            price: 38.6, color: "#F59E0B", requires: ["battery", "grid"] },
+    { time: "8:00pm",  action: "CHARGE", title: "Topping up for tomorrow",  reason: "Price dropping — refilling now",   price: 11.8, color: "#22C55E", requires: ["battery"] },
   ],
 };
 
@@ -88,6 +89,33 @@ function calculateSavings() {
   return ((peak - charge) / 100 * batterySize).toFixed(2);
 }
 
+// EV planner — finds cheapest slots to hit target % by ready-by time
+function calcEVPlan(targetPct: number, readyByHour: number, currentPct = 20) {
+  const kwhNeeded = ((targetPct - currentPct) / 100) * 60;
+  const kwhPerSlot = 3.7; // 7.4kW charger × 0.5hr
+  const slotsNeeded = Math.max(1, Math.ceil(kwhNeeded / kwhPerSlot));
+  const currentSlot = getCurrentSlotIndex();
+  const readyBySlot = readyByHour * 2;
+
+  const candidates = AGILE_RATES
+    .map((r, i) => ({ ...r, i }))
+    .filter(r => r.i >= currentSlot && r.i < readyBySlot)
+    .sort((a, b) => a.pence - b.pence)
+    .slice(0, slotsNeeded);
+
+  const totalCost = candidates.reduce((s, r) => s + (r.pence / 100) * kwhPerSlot, 0);
+  const sorted = [...candidates].sort((a, b) => a.i - b.i);
+  const lastSlot = sorted[sorted.length - 1];
+  const finishHour = lastSlot ? Math.floor(lastSlot.i / 2) : readyByHour;
+  const finishMin = lastSlot && lastSlot.i % 2 === 1 ? "30" : "00";
+
+  return {
+    slots: candidates.map(r => r.i),
+    cost: totalCost,
+    finishTime: `${String(finishHour).padStart(2, "0")}:${finishMin}`,
+  };
+}
+
 function getBarColor(p: number) {
   if (p < 10) return "#22C55E";
   if (p < 20) return "#F59E0B";
@@ -96,9 +124,12 @@ function getBarColor(p: number) {
 }
 
 const MODE_CONFIG = {
-  CHARGE: { icon: "⚡", label: "CHARGING", color: "#22C55E", bg: "#0D1F14", border: "#16A34A30", description: (best: any, current: number) => `Buying at ${current}p — filling your battery now while prices are low.` },
-  EXPORT: { icon: "💰", label: "EXPORTING", color: "#F59E0B", bg: "#1A1200", border: "#F59E0B30", description: (best: any, current: number) => `Selling to the grid at ${current}p — peak price, earning for you now.` },
-  HOLD:   { icon: "⏸", label: "HOLDING",   color: "#9CA3AF", bg: "#0D1117", border: "#1F2937",   description: (best: any, current: number) => `Price is ${current}p — waiting for cheaper slot at ${best.time} (${best.price}p).` },
+  CHARGE: { icon: "⚡", label: "CHARGING", color: "#22C55E", bg: "#0D1F14", border: "#16A34A30",
+    description: (_: any, current: number) => `Buying at ${current}p — filling your battery now while prices are low.` },
+  EXPORT: { icon: "💰", label: "EXPORTING", color: "#F59E0B", bg: "#1A1200", border: "#F59E0B30",
+    description: (_: any, current: number) => `Selling to the grid at ${current}p — peak price, earning for you now.` },
+  HOLD:   { icon: "⏸", label: "HOLDING",   color: "#9CA3AF", bg: "#0D1117", border: "#1F2937",
+    description: (best: any, current: number) => `Price is ${current}p — waiting for cheaper slot at ${best.time} (${best.price}p).` },
 };
 
 // ── FLOW DOTS ─────────────────────────────────────────────────────────────
@@ -127,11 +158,7 @@ function ManualOverride({ currentPence, connectedDevices }: { currentPence: numb
   const isExpensive = currentPence > 20;
 
   const handleOverride = (action: string) => {
-    if (override === action) {
-      setOverride(null); // cancel
-    } else {
-      setOverride(action);
-    }
+    setOverride(override === action ? null : action);
     setExpanded(false);
   };
 
@@ -140,35 +167,26 @@ function ManualOverride({ currentPence, connectedDevices }: { currentPence: numb
   return (
     <div style={{ margin: "0 20px 16px" }}>
       {override ? (
-        // Active override state
         <div style={{ background: "#1A1A2E", border: "1px solid #38BDF840", borderRadius: 16, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 11, color: "#38BDF8", fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>MANUAL OVERRIDE ACTIVE</div>
             <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>
-              {override === "charge_now" ? "⚡ Charging now" : override === "charge_ev" ? "🚗 Charging EV" : "⏸ Paused"}
+              {override === "charge_now" ? "⚡ Charging battery" : override === "charge_ev" ? "🚗 Charging EV" : "⏸ Paused"}
             </div>
             <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>
-              {isExpensive ? `Currently ${currentPence}p — not the cheapest but charging as requested` : `Currently ${currentPence}p — good time to charge`}
+              {isExpensive ? `Currently ${currentPence}p — not cheapest but charging as requested` : `Currently ${currentPence}p — good time to charge`}
             </div>
           </div>
-          <button
-            onClick={() => setOverride(null)}
-            style={{ background: "#374151", border: "none", borderRadius: 8, padding: "6px 12px", color: "#9CA3AF", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0, marginLeft: 12 }}
-          >
+          <button onClick={() => setOverride(null)} style={{ background: "#374151", border: "none", borderRadius: 8, padding: "6px 12px", color: "#9CA3AF", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0, marginLeft: 12 }}>
             Cancel
           </button>
         </div>
       ) : !expanded ? (
-        // Collapsed — just a subtle button
-        <button
-          onClick={() => setExpanded(true)}
-          style={{ width: "100%", background: "none", border: "1px dashed #374151", borderRadius: 12, padding: "10px 16px", color: "#6B7280", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}
-        >
+        <button onClick={() => setExpanded(true)} style={{ width: "100%", background: "none", border: "1px dashed #374151", borderRadius: 12, padding: "10px 16px", color: "#6B7280", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span>Manual override</span>
           <span style={{ fontSize: 11, color: "#4B5563" }}>Now: {currentPence}p/kWh</span>
         </button>
       ) : (
-        // Expanded — show options
         <div style={{ background: "#111827", border: "1px solid #374151", borderRadius: 16, padding: "14px 16px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <div style={{ fontSize: 11, color: "#6B7280", fontWeight: 700, letterSpacing: 1 }}>OVERRIDE GRIDLY</div>
@@ -176,39 +194,152 @@ function ManualOverride({ currentPence, connectedDevices }: { currentPence: numb
           </div>
           <div style={{ display: "grid", gap: 8 }}>
             {hasBattery && (
-              <button
-                onClick={() => handleOverride("charge_now")}
-                style={{ background: "#16A34A15", border: "1px solid #16A34A30", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}
-              >
+              <button onClick={() => handleOverride("charge_now")} style={{ background: "#16A34A15", border: "1px solid #16A34A30", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "#22C55E", marginBottom: 2 }}>⚡ Charge battery now</div>
                 <div style={{ fontSize: 11, color: "#6B7280" }}>Force charge regardless of price</div>
               </button>
             )}
             {hasEV && (
-              <button
-                onClick={() => handleOverride("charge_ev")}
-                style={{ background: "#38BDF815", border: "1px solid #38BDF830", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}
-              >
+              <button onClick={() => handleOverride("charge_ev")} style={{ background: "#38BDF815", border: "1px solid #38BDF830", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "#38BDF8", marginBottom: 2 }}>🚗 Charge EV now</div>
                 <div style={{ fontSize: 11, color: "#6B7280" }}>Start charging at {currentPence}p/kWh</div>
               </button>
             )}
-            <button
-              onClick={() => handleOverride("pause")}
-              style={{ background: "#37415115", border: "1px solid #37415130", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}
-            >
+            <button onClick={() => handleOverride("pause")} style={{ background: "#37415115", border: "1px solid #37415130", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#9CA3AF", marginBottom: 2 }}>⏸ Pause Gridly</div>
               <div style={{ fontSize: 11, color: "#6B7280" }}>Stop all automated actions temporarily</div>
             </button>
           </div>
-          <button
-            onClick={() => setExpanded(false)}
-            style={{ marginTop: 10, background: "none", border: "none", color: "#4B5563", fontSize: 11, cursor: "pointer", fontFamily: "inherit", padding: 0 }}
-          >
+          <button onClick={() => setExpanded(false)} style={{ marginTop: 10, background: "none", border: "none", color: "#4B5563", fontSize: 11, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
             Cancel
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── EV READY-BY ───────────────────────────────────────────────────────────
+function EVReadyBy() {
+  const [targetPct, setTargetPct] = useState(80);
+  const [readyByHour, setReadyByHour] = useState(7);
+  const [expanded, setExpanded] = useState(false);
+  const plan = calcEVPlan(targetPct, readyByHour);
+  const hours = [1,2,3,4,5,6,7,8,9,10,11,12];
+
+  return (
+    <div style={{ margin: "0 20px 16px", background: "#0D1521", border: "1px solid #38BDF820", borderRadius: 16, overflow: "hidden" }}>
+      <button onClick={() => setExpanded(e => !e)} style={{ width: "100%", background: "none", border: "none", padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ textAlign: "left" }}>
+          <div style={{ fontSize: 11, color: "#38BDF8", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>EV READY-BY</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>
+            🚗 {targetPct}% by {readyByHour}:00am · <span style={{ color: "#22C55E" }}>£{plan.cost.toFixed(2)}</span>
+          </div>
+        </div>
+        {expanded ? <ChevronUp size={16} color="#6B7280" /> : <ChevronDown size={16} color="#6B7280" />}
+      </button>
+      {expanded && (
+        <div style={{ padding: "0 16px 16px", borderTop: "1px solid #1F2937" }}>
+          <div style={{ paddingTop: 14, marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700 }}>CHARGE TO</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#38BDF8" }}>{targetPct}%</span>
+            </div>
+            <input type="range" min={20} max={100} step={10} value={targetPct} onChange={e => setTargetPct(Number(e.target.value))} style={{ width: "100%", accentColor: "#38BDF8", cursor: "pointer" }} />
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#374151", marginTop: 2 }}>
+              <span>20%</span><span>50%</span><span>80%</span><span>100%</span>
+            </div>
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700, marginBottom: 8 }}>READY BY</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {hours.map(h => (
+                <button key={h} onClick={() => setReadyByHour(h)} style={{ padding: "5px 10px", borderRadius: 8, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, background: readyByHour === h ? "#38BDF8" : "#1F2937", color: readyByHour === h ? "#0D1117" : "#6B7280" }}>
+                  {h}am
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ background: "#111827", borderRadius: 10, padding: "10px 14px" }}>
+            <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 4 }}>Gridly's plan</div>
+            <div style={{ fontSize: 13, color: "#F9FAFB", lineHeight: 1.6 }}>
+              Charge during the <span style={{ color: "#22C55E", fontWeight: 700 }}>{plan.slots.length} cheapest slots</span> overnight. Done by <span style={{ color: "#38BDF8", fontWeight: 700 }}>{plan.finishTime}</span>. Cost: <span style={{ color: "#22C55E", fontWeight: 700 }}>£{plan.cost.toFixed(2)}</span>.
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── BATTERY RESERVE ───────────────────────────────────────────────────────
+function BatteryReserve() {
+  const [reserve, setReserve] = useState(20);
+  const [expanded, setExpanded] = useState(false);
+
+  const label = reserve <= 10
+    ? "Maximise earnings — Gridly uses almost everything"
+    : reserve <= 20
+    ? "Balanced — enough left for a short power cut"
+    : reserve <= 40
+    ? "Safety buffer — covers most outages"
+    : "Conservative — prioritising backup over savings";
+
+  return (
+    <div style={{ margin: "0 20px 16px", background: "#0D1F14", border: "1px solid #16A34A20", borderRadius: 16, overflow: "hidden" }}>
+      <button onClick={() => setExpanded(e => !e)} style={{ width: "100%", background: "none", border: "none", padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ textAlign: "left" }}>
+          <div style={{ fontSize: 11, color: "#22C55E", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>BATTERY RESERVE</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>
+            🔋 Always keep <span style={{ color: "#22C55E" }}>{reserve}%</span> — never touch it
+          </div>
+        </div>
+        {expanded ? <ChevronUp size={16} color="#6B7280" /> : <ChevronDown size={16} color="#6B7280" />}
+      </button>
+      {expanded && (
+        <div style={{ padding: "0 16px 16px", borderTop: "1px solid #1F2937" }}>
+          <div style={{ paddingTop: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700 }}>MINIMUM RESERVE</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#22C55E" }}>{reserve}%</span>
+            </div>
+            <input type="range" min={0} max={50} step={5} value={reserve} onChange={e => setReserve(Number(e.target.value))} style={{ width: "100%", accentColor: "#22C55E", cursor: "pointer" }} />
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#374151", marginTop: 2 }}>
+              <span>0%</span><span>10%</span><span>20%</span><span>30%</span><span>40%</span><span>50%</span>
+            </div>
+            <div style={{ marginTop: 12, fontSize: 12, color: "#6B7280", lineHeight: 1.5 }}>{label}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SOLAR FORECAST CARD ───────────────────────────────────────────────────
+function SolarForecastCard() {
+  const f = SANDBOX.solarForecast;
+  const advice = f.kwh > 15
+    ? "Good solar tomorrow — Gridly will export more today and charge less overnight. Free energy incoming."
+    : f.kwh > 8
+    ? "Moderate solar tomorrow — Gridly will partially charge overnight and top up from your panels."
+    : "Low solar tomorrow — Gridly will fully charge your battery overnight at the cheapest rate.";
+
+  return (
+    <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #F59E0B20", borderRadius: 16, padding: "14px 16px" }}>
+      <div style={{ fontSize: 11, color: "#F59E0B", fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>TOMORROW'S SOLAR</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 900, color: "#F9FAFB", letterSpacing: -0.5 }}>{f.icon} {f.kwh} kWh</div>
+          <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>{f.condition} · {f.confidence}% confidence</div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 10, color: "#4B5563", marginBottom: 4 }}>vs today</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#22C55E" }}>+{f.deltaKwh} kWh ↑</div>
+        </div>
+      </div>
+      <div style={{ background: "#111827", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#9CA3AF", lineHeight: 1.5 }}>
+        {advice}
+      </div>
     </div>
   );
 }
@@ -225,6 +356,9 @@ function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVIC
   const s = SANDBOX.solar;
   const isExporting = s.gridW > 0;
   const isCharging = mode === "CHARGE";
+  const hasBattery = connectedDevices.some(d => d.id === "battery");
+  const hasEV = connectedDevices.some(d => d.id === "ev");
+  const hasSolar = connectedDevices.some(d => d.id === "solar");
 
   return (
     <div>
@@ -249,19 +383,24 @@ function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVIC
         </div>
       </div>
 
-      {/* Dynamic mode card */}
+      {/* Mode card */}
       <div style={{ margin: "0 20px 16px", background: cfg.bg, border: `1px solid ${cfg.border}`, borderRadius: 16, padding: "16px 20px" }}>
         <div style={{ fontSize: 10, color: cfg.color, fontWeight: 700, letterSpacing: 1.5, marginBottom: 8 }}>RIGHT NOW</div>
-        <div style={{ fontSize: 22, fontWeight: 900, color: cfg.color, letterSpacing: -0.5, marginBottom: 4 }}>
-          {cfg.icon} {cfg.label}
-        </div>
-        <div style={{ fontSize: 13, color: "#9CA3AF", lineHeight: 1.5 }}>
-          {cfg.description(best, currentPence)}
-        </div>
+        <div style={{ fontSize: 22, fontWeight: 900, color: cfg.color, letterSpacing: -0.5, marginBottom: 4 }}>{cfg.icon} {cfg.label}</div>
+        <div style={{ fontSize: 13, color: "#9CA3AF", lineHeight: 1.5 }}>{cfg.description(best, currentPence)}</div>
       </div>
 
       {/* Manual override */}
       <ManualOverride currentPence={currentPence} connectedDevices={connectedDevices} />
+
+      {/* EV Ready-by */}
+      {hasEV && <EVReadyBy />}
+
+      {/* Battery reserve */}
+      {hasBattery && <BatteryReserve />}
+
+      {/* Solar forecast */}
+      {hasSolar && <SolarForecastCard />}
 
       {/* Energy flow — only connected devices */}
       <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "20px" }}>
@@ -339,10 +478,7 @@ function HomeTab({ connectedDevices, now }: { connectedDevices: typeof ALL_DEVIC
             );
           })}
         </div>
-        <button
-          onClick={() => window.location.href = '/onboarding'}
-          style={{ width: "100%", marginTop: 10, background: "none", border: "1px dashed #374151", borderRadius: 12, padding: "12px 16px", color: "#4B5563", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
-        >
+        <button onClick={() => window.location.href = '/onboarding'} style={{ width: "100%", marginTop: 10, background: "none", border: "1px dashed #374151", borderRadius: 12, padding: "12px 16px", color: "#4B5563", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
           + Add another device
         </button>
       </div>
@@ -389,8 +525,7 @@ function PlanTab({ connectedDevices }: { connectedDevices: typeof ALL_DEVICES })
         )}
         <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 72 }}>
           {AGILE_RATES.map((r, i) => (
-            <div key={i} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)}
-              style={{ flex: 1, height: "100%", display: "flex", alignItems: "flex-end", cursor: "pointer" }}>
+            <div key={i} onMouseEnter={() => setHovered(i)} onMouseLeave={() => setHovered(null)} style={{ flex: 1, height: "100%", display: "flex", alignItems: "flex-end", cursor: "pointer" }}>
               <div style={{ width: "100%", height: Math.max(2, (r.pence / maxPence) * 72), background: r.pence === minPence ? "#22C55E" : i === currentSlot ? "#fff" : getBarColor(r.pence), opacity: hovered !== null && hovered !== i ? 0.3 : 1, borderRadius: "2px 2px 0 0", transition: "opacity 0.1s" }} />
             </div>
           ))}
@@ -408,32 +543,32 @@ function PlanTab({ connectedDevices }: { connectedDevices: typeof ALL_DEVICES })
         </div>
       </div>
 
-      {/* Plan timeline */}
+      {/* Schedule */}
       <div style={{ margin: "0 20px" }}>
         <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 12 }}>GRIDLY'S SCHEDULE</div>
         {SANDBOX.plan
           .filter(slot => slot.requires.length === 0 || slot.requires.some(r => connectedDevices.some(d => d.id === r)))
-          .map((slot, i) => {
-          const isLast = i === SANDBOX.plan.length - 1;
-          return (
-            <div key={i} style={{ display: "flex", gap: 14 }}>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 36, flexShrink: 0 }}>
-                <div style={{ width: 32, height: 32, borderRadius: 10, background: `${slot.color}15`, border: `1.5px solid ${slot.color}30`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
-                  {slot.action === "CHARGE" ? "⚡" : slot.action === "EXPORT" ? "💰" : slot.action === "SOLAR" ? "☀️" : "⏸"}
+          .map((slot, i, arr) => {
+            const isLast = i === arr.length - 1;
+            return (
+              <div key={i} style={{ display: "flex", gap: 14 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 36, flexShrink: 0 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: 10, background: `${slot.color}15`, border: `1.5px solid ${slot.color}30`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
+                    {slot.action === "CHARGE" ? "⚡" : slot.action === "EXPORT" ? "💰" : slot.action === "SOLAR" ? "☀️" : "⏸"}
+                  </div>
+                  {!isLast && <div style={{ width: 1.5, flex: 1, background: "#1F2937", minHeight: 20 }} />}
                 </div>
-                {!isLast && <div style={{ width: 1.5, flex: 1, background: "#1F2937", minHeight: 20 }} />}
-              </div>
-              <div style={{ flex: 1, paddingBottom: isLast ? 0 : 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB", marginBottom: 2 }}>{slot.title}</div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: slot.color, flexShrink: 0, marginLeft: 8 }}>{slot.price}p</div>
+                <div style={{ flex: 1, paddingBottom: isLast ? 0 : 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB", marginBottom: 2 }}>{slot.title}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: slot.color, flexShrink: 0, marginLeft: 8 }}>{slot.price}p</div>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 2 }}>{slot.reason}</div>
+                  <div style={{ fontSize: 10, color: "#374151" }}>{slot.time}</div>
                 </div>
-                <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 2 }}>{slot.reason}</div>
-                <div style={{ fontSize: 10, color: "#374151" }}>{slot.time}</div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
       </div>
     </div>
   );
@@ -443,9 +578,6 @@ function PlanTab({ connectedDevices }: { connectedDevices: typeof ALL_DEVICES })
 function HistoryTab({ connectedDevices }: { connectedDevices: typeof ALL_DEVICES }) {
   const [activeDevice, setActiveDevice] = useState<string>("all");
 
-  const deviceIds = connectedDevices.map(d => d.id);
-
-  // Build values per day based on selected device
   const values = SANDBOX.history.map(d => {
     if (activeDevice === "all") return d.solar + d.battery + d.ev + d.grid;
     return (d as any)[activeDevice] ?? 0;
@@ -458,7 +590,6 @@ function HistoryTab({ connectedDevices }: { connectedDevices: typeof ALL_DEVICES
     ? "#22C55E"
     : ALL_DEVICES.find(d => d.id === activeDevice)?.historyColor ?? "#22C55E";
 
-  // Per device week totals for connected devices only
   const deviceTotals = connectedDevices.map(device => ({
     ...device,
     total: SANDBOX.history.reduce((s, d) => s + ((d as any)[device.id] ?? 0), 0).toFixed(2),
@@ -471,14 +602,12 @@ function HistoryTab({ connectedDevices }: { connectedDevices: typeof ALL_DEVICES
         <div style={{ fontSize: 13, color: "#6B7280" }}>Every penny Gridly has made you</div>
       </div>
 
-      {/* All-time */}
       <div style={{ margin: "0 20px 16px", background: "linear-gradient(135deg, #0a0a0a, #111827)", border: "1px solid #1F2937", borderRadius: 20, padding: "24px", textAlign: "center" }}>
         <div style={{ fontSize: 11, color: "#4B5563", letterSpacing: 1, fontWeight: 700, marginBottom: 8 }}>ALL TIME</div>
         <div style={{ fontSize: 52, fontWeight: 900, color: "#22C55E", letterSpacing: -3, lineHeight: 1 }}>+£{SANDBOX.allTime}</div>
         <div style={{ fontSize: 12, color: "#4B5563", marginTop: 8 }}>since {SANDBOX.allTimeSince}</div>
       </div>
 
-      {/* This week chart */}
       <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "16px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div>
@@ -491,27 +620,14 @@ function HistoryTab({ connectedDevices }: { connectedDevices: typeof ALL_DEVICES
             </div>
           </div>
         </div>
-
-        {/* Device filter pills */}
         <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-          <button
-            onClick={() => setActiveDevice("all")}
-            style={{ padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, background: activeDevice === "all" ? "#22C55E" : "#1F2937", color: activeDevice === "all" ? "#111827" : "#6B7280" }}
-          >
-            All
-          </button>
+          <button onClick={() => setActiveDevice("all")} style={{ padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, background: activeDevice === "all" ? "#22C55E" : "#1F2937", color: activeDevice === "all" ? "#111827" : "#6B7280" }}>All</button>
           {connectedDevices.map(device => (
-            <button
-              key={device.id}
-              onClick={() => setActiveDevice(device.id)}
-              style={{ padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, background: activeDevice === device.id ? device.historyColor : "#1F2937", color: activeDevice === device.id ? "#111827" : "#6B7280" }}
-            >
+            <button key={device.id} onClick={() => setActiveDevice(device.id)} style={{ padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, background: activeDevice === device.id ? device.historyColor : "#1F2937", color: activeDevice === device.id ? "#111827" : "#6B7280" }}>
               {device.name.split(" ")[0]}
             </button>
           ))}
         </div>
-
-        {/* Bars */}
         <div style={{ display: "flex", gap: 6, alignItems: "flex-end", height: 72, marginBottom: 8 }}>
           {SANDBOX.history.map((d, i) => {
             const val = values[i];
@@ -534,7 +650,6 @@ function HistoryTab({ connectedDevices }: { connectedDevices: typeof ALL_DEVICES
         </div>
       </div>
 
-      {/* Per device breakdown — only connected devices */}
       <div style={{ margin: "0 20px" }}>
         <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>THIS WEEK BY DEVICE</div>
         <div style={{ display: "grid", gap: 8 }}>
@@ -550,7 +665,6 @@ function HistoryTab({ connectedDevices }: { connectedDevices: typeof ALL_DEVICES
                   </div>
                   <div style={{ fontSize: 14, fontWeight: 800, color: device.color }}>£{device.total}</div>
                 </div>
-                {/* Progress bar */}
                 <div style={{ height: 3, background: "#1F2937", borderRadius: 2 }}>
                   <div style={{ height: "100%", width: `${pct}%`, background: device.color, borderRadius: 2, transition: "width 0.4s ease" }} />
                 </div>
