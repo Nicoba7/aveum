@@ -1,3 +1,4 @@
+import { buildGridlyPlan } from "../lib/gridlyPlan";
 import { useState, useEffect, useMemo } from "react";
 import { Sun, Battery, Zap, Grid3X3, TrendingUp, Home, Calendar, Clock, ChevronDown, ChevronUp } from "lucide-react";
 import TomorrowForecast from "./TomorrowForecast";
