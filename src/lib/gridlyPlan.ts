@@ -83,7 +83,7 @@ export function buildGridlyPlan(
       reason: "Cheap rate — best price of the night",
       price: cheapest.pence,
       color: "#22C55E",
-      requires: hasBattery ? ["battery"] : [],
+       hasBattery ? ["battery"] : [],
       highlight: true,
     },
     {
@@ -93,7 +93,7 @@ export function buildGridlyPlan(
       reason: "Nothing to do — holding steady",
       price: secondCheap.pence,
       color: "#6B7280",
-      requires: [],
+       [],
       highlight: false,
     },
     {
@@ -118,7 +118,7 @@ export function buildGridlyPlan(
           : "Solar available — reducing grid import",
       price: middaySolar.pence,
       color: "#F59E0B",
-      requires: hasSolar ? ["solar"] : [],
+      requires: ["solar"],
       highlight: false,
     },
     {
