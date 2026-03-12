@@ -125,15 +125,95 @@ function OctopusForm({ creds, setCreds }: { creds: any; setCreds: any }) {
 }
 
 // ── SOLAR / BATTERY FORM ──────────────────────────────────────────────────
+const INVERTER_BRANDS = [
+  {
+    id: "givenergy",
+    name: "GivEnergy",
+    description: "All models",
+    fields: [
+      { key: "apiKey", label: "API KEY", placeholder: "your-givenergy-api-key", secret: true, hint: "givenergy.cloud → Account Details → Generate API Key", link: { text: "Open GivEnergy", url: "https://givenergy.cloud" } },
+      { key: "serial", label: "INVERTER SERIAL NUMBER", placeholder: "SA2XXXXXXXXXX", secret: false, hint: "On the sticker on your inverter or in the app" },
+    ],
+  },
+  {
+    id: "solax",
+    name: "Solax",
+    description: "X1 / X3 / Hybrid",
+    fields: [
+      { key: "tokenId", label: "TOKEN ID", placeholder: "20240XXXXXXXXXXX", secret: true, hint: "solaxcloud.com → Support → Third-party Ecology" },
+      { key: "wifiSn", label: "WIFI DONGLE SERIAL", placeholder: "SUT****VB1", secret: false, hint: "Registration number shown in Solax Cloud under your inverter" },
+    ],
+  },
+  {
+    id: "solarEdge",
+    name: "SolarEdge",
+    description: "With battery",
+    fields: [
+      { key: "apiKey", label: "API KEY", placeholder: "your-solaredge-api-key", secret: true, hint: "monitoring.solaredge.com → Admin → Site Access → API Access" },
+      { key: "siteId", label: "SITE ID", placeholder: "XXXXXXX", secret: false, hint: "Shown in the URL of your SolarEdge monitoring portal" },
+    ],
+  },
+  {
+    id: "solis",
+    name: "Solis",
+    description: "S5 / S6",
+    fields: [
+      { key: "apiKey", label: "API KEY", placeholder: "your-solis-api-key", secret: true },
+      { key: "apiSecret", label: "API SECRET", placeholder: "your-solis-api-secret", secret: true, hint: "Solis Cloud → Account → API Management" },
+      { key: "stationId", label: "STATION ID", placeholder: "XXXXXXXXXX", secret: false },
+    ],
+  },
+];
+
 function SolarBatteryForm({ creds, setCreds }: { creds: any; setCreds: any }) {
+  const [brand, setBrand] = useState<string>(creds.brand || "");
+  const selectedBrand = INVERTER_BRANDS.find(b => b.id === brand);
+
+  const handleBrandSelect = (id: string) => {
+    setBrand(id);
+    setCreds({ brand: id });
+  };
+
   return (
     <div style={{ marginBottom: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
         <Sun size={16} color="#F59E0B" />
-        <span style={{ fontSize: 13, fontWeight: 700, color: "#F9FAFB" }}>Solar & Battery (GivEnergy)</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#F9FAFB" }}>Solar & Battery</span>
       </div>
-      <Field label="API KEY" placeholder="your-givenergy-api-key" hint="givenergy.cloud → Account Details → Generate API Key" link={{ text: "Open GivEnergy", url: "https://givenergy.cloud" }} value={creds.apiKey} onChange={v => setCreds((c: any) => ({ ...c, apiKey: v }))} secret />
-      <Field label="INVERTER SERIAL NUMBER" placeholder="SA2XXXXXXXXXX" hint="On the sticker on your inverter or in the app" value={creds.serial} onChange={v => setCreds((c: any) => ({ ...c, serial: v }))} />
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF", marginBottom: 8, letterSpacing: 0.5 }}>SELECT YOUR INVERTER BRAND</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+        {INVERTER_BRANDS.map(b => (
+          <button
+            key={b.id}
+            onClick={() => handleBrandSelect(b.id)}
+            style={{
+              background: brand === b.id ? "#F59E0B20" : "#111827",
+              border: `2px solid ${brand === b.id ? "#F59E0B" : "#374151"}`,
+              borderRadius: 10, padding: "10px 12px", cursor: "pointer",
+              textAlign: "left", fontFamily: "inherit", transition: "all 0.15s ease",
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700, color: brand === b.id ? "#F59E0B" : "#F9FAFB", marginBottom: 2 }}>{b.name}</div>
+            <div style={{ fontSize: 10, color: "#6B7280" }}>{b.description}</div>
+          </button>
+        ))}
+      </div>
+      {selectedBrand && (
+        <div>
+          {selectedBrand.fields.map(field => (
+            <Field
+              key={field.key}
+              label={field.label}
+              placeholder={field.placeholder}
+              hint={(field as any).hint}
+              link={(field as any).link}
+              secret={field.secret}
+              value={creds[field.key] || ""}
+              onChange={v => setCreds((c: any) => ({ ...c, [field.key]: v }))}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
