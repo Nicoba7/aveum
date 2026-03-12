@@ -9,6 +9,7 @@ import CustomerValue from "./pages/CustomerValue";
 import NetworkGrowth from "./pages/NetworkGrowth";
 import MarketOpportunity from "./pages/MarketOpportunity";
 import Onboarding from "./pages/Onboarding";
+import Landing from "./pages/Landing";
 import SimplifiedDashboard from "./pages/SimplifiedDashboard";
 import DeviceManagement from "./pages/DeviceManagement";
 import NotFound from "./pages/NotFound";
@@ -22,7 +23,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Onboarding />} />
+          <Route path="/" element={<Landing />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/dashboard" element={<SimplifiedDashboard />} />
           <Route path="/devices" element={<DeviceManagement />} />
