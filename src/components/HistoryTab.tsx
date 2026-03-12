@@ -85,8 +85,6 @@ export default function HistoryTab({
   }
 
 
-  const history = Array.isArray(SANDBOX?.history) ? SANDBOX.history : [];
-
   if (history.length === 0) {
     return (
       <div style={{ padding: "44px 24px 0", color: "#9CA3AF" }}>
