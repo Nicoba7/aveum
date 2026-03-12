@@ -646,13 +646,19 @@ export function CarbonTracker({ connectedDevices }: { connectedDevices: DeviceCo
 }
 
 // ── DEVICE HEALTH ALERTS ──────────────────────────────────────────────────
+const DEVICE_FIX: Record<string, string> = {
+  ev:      "Try unplugging your charger from the wall and plugging it back in.",
+  battery: "Check the battery unit has power and your internet is working.",
+  solar:   "Check your inverter has power and your internet is working.",
+  grid:    "Check your smart meter is plugged in and your internet is working.",
+};
+
 export function DeviceHealthAlerts({ connectedDevices }: { connectedDevices: DeviceConfig[] }) {
   const alerts = connectedDevices.filter(d => {
     const h = (SANDBOX.deviceHealth as any)[d.id];
     return h && !h.ok;
   });
   if (alerts.length === 0) return null;
-
   return (
     <div style={{ margin: "0 20px 16px" }}>
       {alerts.map(device => {
@@ -660,14 +666,20 @@ export function DeviceHealthAlerts({ connectedDevices }: { connectedDevices: Dev
         const hrs = Math.floor(h.lastSeen / 60);
         const mins = h.lastSeen % 60;
         const ago = hrs > 0 ? `${hrs}h ${mins}m ago` : `${mins}m ago`;
+        const fix = DEVICE_FIX[device.id] ?? "Check the device has power and your internet is working.";
         return (
-          <div key={device.id} style={{ background: "#1A0A0A", border: "1px solid #EF444430", borderRadius: 14, padding: "12px 16px", marginBottom: 8, display: "flex", alignItems: "center", gap: 12 }}>
+          <div key={device.id} style={{ background: "#1A0A0A", border: "1px solid #EF444430", borderRadius: 14, padding: "12px 16px", marginBottom: 8, display: "flex", alignItems: "flex-start", gap: 12 }}>
             <div style={{ fontSize: 18, flexShrink: 0 }}>⚠️</div>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#FCA5A5", marginBottom: 2 }}>
-                {device.name} not reporting
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#FCA5A5", marginBottom: 4 }}>
+                Your {device.name} went offline {ago}
               </div>
-              <div style={{ fontSize: 11, color: "#6B7280" }}>Last seen {ago} — Gridly has paused automated actions for this device</div>
+              <div style={{ fontSize: 12, color: "#D1D5DB", marginBottom: 4, lineHeight: 1.5 }}>
+                {fix}
+              </div>
+              <div style={{ fontSize: 11, color: "#4B5563" }}>
+                Gridly has paused actions for this device until it's back online.
+              </div>
             </div>
           </div>
         );
@@ -675,7 +687,6 @@ export function DeviceHealthAlerts({ connectedDevices }: { connectedDevices: Dev
     </div>
   );
 }
-
 // ── NIGHTLY REPORT CARD ───────────────────────────────────────────────────
 export function NightlyReportCard() {
   const hour = new Date().getHours();
