@@ -2,6 +2,7 @@ import HistoryTab from "../components/HistoryTab";
 import HomeTab from "../components/HomeTab";
 import PlanTab from "../components/PlanTab";
 import { buildGridlyPlan } from "../lib/gridlyPlan";
+import { importTariffsFromApi, type TariffRecord } from "../lib/tariffApi";
 import { useState, useEffect, useMemo } from "react";
 import { Sun, Battery, Zap, Grid3X3, Home, Calendar, Clock, ChevronDown, ChevronUp } from "lucide-react";
 
@@ -277,9 +278,13 @@ export function ManualOverride({ currentPence, connectedDevices }: { currentPenc
 export function EVReadyBy() {
   const [targetPct, setTargetPct] = useState(80);
   const [readyByHour, setReadyByHour] = useState(7);
+  const [chargingPowerKw, setChargingPowerKw] = useState(7.4);
+  const [maxBudget, setMaxBudget] = useState(5);
   const [expanded, setExpanded] = useState(false);
   const plan = calcEVPlan(targetPct, readyByHour);
   const hours = [1,2,3,4,5,6,7,8,9,10,11,12];
+  const overBudget = plan.cost > maxBudget;
+  const adjustedPlanCost = Number((plan.cost * (7.4 / chargingPowerKw)).toFixed(2));
 
   return (
     <div style={{ margin: "0 20px 16px", background: "#0D1521", border: "1px solid #38BDF820", borderRadius: 16, overflow: "hidden" }}>
@@ -287,7 +292,7 @@ export function EVReadyBy() {
         <div style={{ textAlign: "left" }}>
           <div style={{ fontSize: 11, color: "#38BDF8", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>EV READY-BY</div>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>
-            🚗 {targetPct}% by {readyByHour}:00am · <span style={{ color: "#22C55E" }}>£{plan.cost.toFixed(2)}</span>
+            🚗 {targetPct}% by {readyByHour}:00am · <span style={{ color: overBudget ? "#F59E0B" : "#22C55E" }}>£{adjustedPlanCost.toFixed(2)}</span>
           </div>
         </div>
         {expanded ? <ChevronUp size={16} color="#6B7280" /> : <ChevronDown size={16} color="#6B7280" />}
@@ -314,10 +319,29 @@ export function EVReadyBy() {
               ))}
             </div>
           </div>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700 }}>CHARGER POWER</span>
+              <span style={{ fontSize: 12, color: "#38BDF8", fontWeight: 700 }}>{chargingPowerKw.toFixed(1)} kW</span>
+            </div>
+            <input type="range" min={3.6} max={11} step={0.2} value={chargingPowerKw} onChange={e => setChargingPowerKw(Number(e.target.value))} style={{ width: "100%", accentColor: "#38BDF8", cursor: "pointer" }} />
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700 }}>MAX COST TONIGHT</span>
+              <span style={{ fontSize: 12, color: overBudget ? "#F59E0B" : "#22C55E", fontWeight: 700 }}>£{maxBudget.toFixed(2)}</span>
+            </div>
+            <input type="range" min={1} max={10} step={0.5} value={maxBudget} onChange={e => setMaxBudget(Number(e.target.value))} style={{ width: "100%", accentColor: overBudget ? "#F59E0B" : "#22C55E", cursor: "pointer" }} />
+            {overBudget && (
+              <div style={{ marginTop: 6, fontSize: 11, color: "#F59E0B" }}>
+                Current settings estimate £{adjustedPlanCost.toFixed(2)}. Try lowering target, increasing ready-by time, or increasing max budget.
+              </div>
+            )}
+          </div>
           <div style={{ background: "#111827", borderRadius: 10, padding: "10px 14px" }}>
             <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 4 }}>Gridly's plan</div>
             <div style={{ fontSize: 13, color: "#F9FAFB", lineHeight: 1.6 }}>
-              Charge during the <span style={{ color: "#22C55E", fontWeight: 700 }}>{plan.slots.length} cheapest slots</span> overnight. Done by <span style={{ color: "#38BDF8", fontWeight: 700 }}>{plan.finishTime}</span>. Cost: <span style={{ color: "#22C55E", fontWeight: 700 }}>£{plan.cost.toFixed(2)}</span>.
+              Charge during the <span style={{ color: "#22C55E", fontWeight: 700 }}>{plan.slots.length} cheapest slots</span> overnight. Done by <span style={{ color: "#38BDF8", fontWeight: 700 }}>{plan.finishTime}</span>. Estimated: <span style={{ color: overBudget ? "#F59E0B" : "#22C55E", fontWeight: 700 }}>£{adjustedPlanCost.toFixed(2)}</span>.
             </div>
           </div>
         </div>
@@ -482,17 +506,40 @@ export function BatteryHealthScore() {
 // ── TARIFF SWITCHER ───────────────────────────────────────────────────────
 export function TariffSwitcher({ connectedDevices }: { connectedDevices: DeviceConfig[] }) {
   const [expanded, setExpanded] = useState(false);
+  const [liveTariffs, setLiveTariffs] = useState<TariffRecord[] | null>(null);
+  const [loadingTariffs, setLoadingTariffs] = useState(false);
+  const [tariffError, setTariffError] = useState<string | null>(null);
   const hasEV = connectedDevices.some(d => d.id === "ev");
   const hasBattery = connectedDevices.some(d => d.id === "battery");
-  const tariffs = SANDBOX.tariffs;
-  const current = tariffs.find(t => t.current)!;
+
+  const tariffs = (liveTariffs ?? SANDBOX.tariffs) as TariffRecord[];
+  const current = tariffs.find(t => t.current) ?? tariffs[0];
   const relevant = tariffs.filter(t => {
     if (t.id === "go" && !hasEV) return false;
     if (t.id === "flux" && !hasBattery) return false;
     return true;
   });
-  const best = relevant.reduce((a, b) => b.annualSaving > a.annualSaving ? b : a);
-  const uplift = best.annualSaving - current.annualSaving;
+
+  if (relevant.length === 0) {
+    return null;
+  }
+
+  const best = relevant.reduce((a, b) => (b.annualSaving > a.annualSaving ? b : a), relevant[0]);
+  const uplift = current ? best.annualSaving - current.annualSaving : 0;
+
+  const refreshTariffs = async () => {
+    setLoadingTariffs(true);
+    setTariffError(null);
+    try {
+      const imported = await importTariffsFromApi();
+      setLiveTariffs(imported);
+    } catch (err) {
+      setTariffError(err instanceof Error ? err.message : "Could not import tariff data");
+    } finally {
+      setLoadingTariffs(false);
+    }
+  };
+
   return (
     <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #A78BFA20", borderRadius: 16, overflow: "hidden" }}>
       <button onClick={() => setExpanded(e => !e)} style={{ width: "100%", background: "none", border: "none", padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -509,12 +556,26 @@ export function TariffSwitcher({ connectedDevices }: { connectedDevices: DeviceC
       </button>
       {expanded && (
         <div style={{ padding: "0 16px 16px", borderTop: "1px solid #1F2937" }}>
-          <div style={{ paddingTop: 14, marginBottom: 10, fontSize: 12, color: "#6B7280", lineHeight: 1.5 }}>
-            Based on your devices and usage, here is what each tariff would earn you per year with Gridly:
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, paddingTop: 14 }}>
+            <div style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.5 }}>
+              Based on your devices and usage, here is what each tariff would earn you per year with Gridly.
+            </div>
+            <button
+              onClick={refreshTariffs}
+              disabled={loadingTariffs}
+              style={{ background: "#1F2937", border: "1px solid #374151", borderRadius: 8, padding: "6px 10px", color: "#D1D5DB", fontSize: 11, fontWeight: 700, cursor: loadingTariffs ? "default" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
+            >
+              {loadingTariffs ? "Importing…" : "Import live tariffs"}
+            </button>
           </div>
-          <div style={{ display: "grid", gap: 8 }}>
+          {tariffError && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "#FCA5A5", background: "#2a1111", border: "1px solid #EF444430", borderRadius: 8, padding: "8px 10px" }}>
+              {tariffError}
+            </div>
+          )}
+          <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
             {relevant.map(t => {
-              const diff = t.annualSaving - current.annualSaving;
+              const diff = current ? t.annualSaving - current.annualSaving : 0;
               const isBest = t.id === best.id;
               return (
                 <div key={t.id} style={{ background: t.current ? "#0D1F14" : isBest ? "#1A0F2E" : "#111827", border: `1px solid ${t.current ? "#16A34A30" : isBest ? "#A78BFA30" : "#1F2937"}`, borderRadius: 10, padding: "10px 14px" }}>
@@ -542,7 +603,6 @@ export function TariffSwitcher({ connectedDevices }: { connectedDevices: DeviceC
     </div>
   );
 }
-
 
 
 // ── CARBON TRACKER ────────────────────────────────────────────────────────
