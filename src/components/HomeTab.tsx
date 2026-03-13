@@ -23,6 +23,78 @@ import {
   DeviceConfig,
 } from "../pages/SimplifiedDashboard";
 
+type ExplainabilityInput = {
+  mode: ReturnType<typeof getGridlyMode>;
+  currentPence: number;
+  batteryPct: number;
+  solarW: number;
+  evPct: number;
+  evTargetPct: number;
+  hasBattery: boolean;
+  hasEV: boolean;
+  hasSolar: boolean;
+  hasGrid: boolean;
+};
+
+function buildExplainability(input: ExplainabilityInput) {
+  const {
+    mode,
+    currentPence,
+    batteryPct,
+    solarW,
+    evPct,
+    evTargetPct,
+    hasBattery,
+    hasEV,
+    hasSolar,
+    hasGrid,
+  } = input;
+
+  const expensive = currentPence >= 30;
+  const cheap = currentPence <= 8;
+  const strongSolar = hasSolar && solarW > 2000;
+  const batteryHealthy = hasBattery && batteryPct > 40;
+  const evGap = Math.max(0, evTargetPct - evPct);
+
+  let confidence = 62;
+  if (cheap || expensive) confidence += 14;
+  if (strongSolar) confidence += 10;
+  if (batteryHealthy) confidence += 6;
+  if (hasEV && evGap > 20) confidence += 4;
+  confidence = Math.min(96, confidence);
+
+  let alternativeAction = "HOLD";
+  if (mode === "EXPORT") alternativeAction = "HOLD";
+  else if (mode === "SOLAR") alternativeAction = hasEV ? "EV_CHARGE" : "HOLD";
+  else if (mode === "CHARGE") alternativeAction = hasEV && evGap > 0 ? "EV_CHARGE" : "HOLD";
+  else if (mode === "EV_CHARGE" || mode === "SPLIT_CHARGE") alternativeAction = hasBattery ? "CHARGE" : "HOLD";
+  else if (mode === "HOLD" && cheap && hasBattery) alternativeAction = "CHARGE";
+
+  const altImpact =
+    mode === "EXPORT"
+      ? "~£0.40 lower earnings this hour"
+      : mode === "HOLD"
+      ? "~£0.22 higher import cost likely"
+      : "~£0.18 less value captured this hour";
+
+  const doNothingImpact =
+    mode === "HOLD"
+      ? "Very similar outcome. Gridly is already preserving flexibility."
+      : mode === "EXPORT"
+      ? "You'd miss a peak-export window while prices are elevated."
+      : "You'd likely import more at higher prices later today.";
+
+  const signals = [
+    `Live price: ${currentPence.toFixed(1)}p/kWh`,
+    `Battery: ${hasBattery ? `${batteryPct}%` : "Not connected"}`,
+    `Solar: ${hasSolar ? `${(solarW / 1000).toFixed(1)}kW` : "Not connected"}`,
+    `EV target gap: ${hasEV ? `${evGap}%` : "No EV connected"}`,
+    `Export path: ${hasGrid ? "Available" : "Unavailable"}`,
+  ];
+
+  return { confidence, alternativeAction, altImpact, doNothingImpact, signals };
+}
+
 export default function HomeTab({ connectedDevices, now }: { connectedDevices: DeviceConfig[]; now: Date }) {
   const hour = now.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -63,6 +135,18 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
     mode === "CHARGE" ||
     mode === "EV_CHARGE" ||
     mode === "SPLIT_CHARGE";
+  const explainability = buildExplainability({
+    mode,
+    currentPence,
+    batteryPct: s.batteryPct,
+    solarW: s.w,
+    evPct: evState.pct,
+    evTargetPct: evState.targetPct,
+    hasBattery,
+    hasEV,
+    hasSolar,
+    hasGrid,
+  });
 
   return (
     <div>
@@ -94,6 +178,29 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
             evTargetPct: evState.targetPct,
             readyByHour: evState.readyByHour,
           })}
+        </div>
+      </div>
+
+      <div style={{ margin: "0 20px 16px", background: "#0B1220", border: "1px solid #1E293B", borderRadius: 16, padding: "14px 16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: "#60A5FA", fontWeight: 700, letterSpacing: 1.2 }}>WHY GRIDLY CHOSE THIS</div>
+          <div style={{ fontSize: 11, color: "#BFDBFE", fontWeight: 700 }}>Confidence {explainability.confidence}%</div>
+        </div>
+        <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
+          {explainability.signals.map((signal) => (
+            <div key={signal} style={{ fontSize: 12, color: "#CBD5E1", background: "#0F172A", border: "1px solid #1E293B", borderRadius: 10, padding: "8px 10px" }}>
+              {signal}
+            </div>
+          ))}
+        </div>
+        <div style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>ALTERNATIVE CONSIDERED</div>
+          <div style={{ fontSize: 13, color: "#E2E8F0", fontWeight: 700 }}>{explainability.alternativeAction}</div>
+          <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>{explainability.altImpact}</div>
+        </div>
+        <div style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>IF GRIDLY DID NOTHING</div>
+          <div style={{ fontSize: 11, color: "#CBD5E1", lineHeight: 1.5 }}>{explainability.doNothingImpact}</div>
         </div>
       </div>
 
