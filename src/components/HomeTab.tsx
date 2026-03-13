@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import FlowDot from "./FlowDot";
 import { getGridlyMode, getModeDescription } from "../lib/gridlyEngine";
 import { Battery, Home, Sun, TrendingUp, Zap } from "lucide-react";
 import TomorrowForecast from "../pages/TomorrowForecast";
+import { buildDayPlan } from "../lib/dayPlanner";
 import {
   AGILE_RATES,
   SANDBOX,
@@ -227,6 +228,36 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
     mode === "CHARGE" ||
     mode === "EV_CHARGE" ||
     mode === "SPLIT_CHARGE";
+  const planner = useMemo(() => {
+    const pricesPence = AGILE_RATES.map((rate) => rate.pence);
+    const loadKwh = AGILE_RATES.map((_, i) => {
+      const hour = Math.floor(i / 2);
+      if (hour >= 17 && hour <= 21) return 0.95;
+      if (hour >= 6 && hour <= 8) return 0.75;
+      return 0.55;
+    });
+    const solarKwh = AGILE_RATES.map((_, i) => {
+      const hour = i / 2;
+      const daylightShape = Math.max(0, 1 - Math.abs(hour - 13) / 5);
+      return Number((daylightShape * 0.8).toFixed(2));
+    });
+
+    return buildDayPlan({
+      pricesPence,
+      loadKwh,
+      solarKwh,
+      currentSlot: slotIndex,
+      batteryCapacityKwh: 13.5,
+      socStartKwh: (s.batteryPct / 100) * 13.5,
+      minReserveKwh: (minBatteryReserve / 100) * 13.5,
+      maxChargePerSlotKwh: 2.7,
+      maxDischargePerSlotKwh: 2.7,
+      chargeEfficiency: 0.92,
+      dischargeEfficiency: 0.92,
+      exportEnabled: hasGrid,
+    });
+  }, [slotIndex, s.batteryPct, minBatteryReserve, hasGrid]);
+
   const recommendation = buildCopilotRecommendation({
     mode,
     currentPence,
@@ -299,7 +330,10 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
         )}
 
         <div style={{ fontSize: 18, fontWeight: 800, color: "#F9FAFB", marginBottom: 4 }}>{recommendation.title}</div>
-        <div style={{ fontSize: 12, color: "#9CA3AF", marginBottom: 8 }}>{recommendation.impact}</div>
+        <div style={{ fontSize: 12, color: "#9CA3AF", marginBottom: 4 }}>{recommendation.impact}</div>
+        <div style={{ fontSize: 11, color: "#60A5FA", marginBottom: 8 }}>
+          Day plan: £{planner.optimisedCostPounds.toFixed(2)} vs £{planner.baselineCostPounds.toFixed(2)} baseline (save £{Math.max(0, planner.projectedSavingsPounds).toFixed(2)}).
+        </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
           <button
@@ -331,6 +365,12 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
                 ))}
               </select>
             </label>
+            <div style={{ fontSize: "11px", color: "#93C5FD", lineHeight: 1.4 }}>
+              {GOAL_OPTIONS.find((goal) => goal.id === optimisationGoal)?.hint}
+            </div>
+            <div style={{ fontSize: "10px", color: "#64748B", lineHeight: 1.5 }}>
+              {GOAL_OPTIONS.map((goal) => `${goal.label}: ${goal.hint}`).join(" • ")}
+            </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
               <div style={{ fontSize: 11, color: "#94A3B8" }}>Reserve {minBatteryReserve}%</div>
               <input
@@ -346,6 +386,9 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
           </div>
         )}
       </div>
+
+      {/* Carbon tracker */}
+      <CarbonTracker connectedDevices={connectedDevices} />
 
       {/* All-time counter */}
       <div style={{ margin: "0 20px 16px", background: "linear-gradient(135deg, #0a0a0a, #111827)", border: "1px solid #1F2937", borderRadius: 20, padding: "20px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -370,9 +413,6 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
 
       {/* Charger lock */}
       <ChargerLock connectedDevices={connectedDevices} />
-
-      {/* Carbon tracker */}
-      <CarbonTracker connectedDevices={connectedDevices} />
 
       <ManualOverride currentPence={currentPence} connectedDevices={connectedDevices} />
 
