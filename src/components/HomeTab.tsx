@@ -35,6 +35,76 @@ const GOAL_OPTIONS: { id: OptimisationGoal; label: string; hint: string }[] = [
   { id: "EV_READY", label: "EV ready", hint: "Prioritise hitting your ready-by target" },
 ];
 
+type CopilotAction = "START_CHARGE" | "DELAY_90" | "PAUSE_UNTIL_CHEAP" | "EXPORT_NOW" | "HOLD";
+
+type CopilotRecommendation = {
+  title: string;
+  reason: string;
+  impact: string;
+  action: CopilotAction;
+};
+
+function buildCopilotRecommendation({
+  mode,
+  currentPence,
+  bestSlotPence,
+  hasBattery,
+  hasGrid,
+  hasEV,
+  optimisationGoal,
+}: {
+  mode: ReturnType<typeof getGridlyMode>;
+  currentPence: number;
+  bestSlotPence: number;
+  hasBattery: boolean;
+  hasGrid: boolean;
+  hasEV: boolean;
+  optimisationGoal: OptimisationGoal;
+}): CopilotRecommendation {
+  if (mode === "EXPORT" && hasBattery && hasGrid) {
+    return {
+      title: "Export now",
+      reason: "Current price is in a premium window, so this is a strong earning slot.",
+      impact: "Estimated +£0.45 this hour",
+      action: "EXPORT_NOW",
+    };
+  }
+
+  if (currentPence - bestSlotPence >= 4 && (hasBattery || hasEV)) {
+    return {
+      title: "Delay charging by 90 minutes",
+      reason: `A cheaper slot is coming (${bestSlotPence.toFixed(1)}p). Waiting captures better value.`,
+      impact: `Estimated saving ~£${((currentPence - bestSlotPence) * 0.08).toFixed(2)}`,
+      action: "DELAY_90",
+    };
+  }
+
+  if (optimisationGoal === "EV_READY" && hasEV) {
+    return {
+      title: "Start EV charging now",
+      reason: "EV-ready mode prioritises hitting your target on time.",
+      impact: "Higher readiness confidence by departure time",
+      action: "START_CHARGE",
+    };
+  }
+
+  if (optimisationGoal === "LOWEST_CARBON") {
+    return {
+      title: "Pause until cleaner window",
+      reason: "Lowest-carbon mode shifts usage to greener grid periods.",
+      impact: "Lower CO₂ intensity for this session",
+      action: "PAUSE_UNTIL_CHEAP",
+    };
+  }
+
+  return {
+    title: "Hold current plan",
+    reason: "Gridly is already in a near-optimal state for your selected goal.",
+    impact: "No major change expected",
+    action: "HOLD",
+  };
+}
+
 type ExplainabilityInput = {
   mode: ReturnType<typeof getGridlyMode>;
   currentPence: number;
@@ -116,6 +186,7 @@ function buildExplainability(input: ExplainabilityInput) {
 export default function HomeTab({ connectedDevices, now }: { connectedDevices: DeviceConfig[]; now: Date }) {
   const [optimisationGoal, setOptimisationGoal] = useState<OptimisationGoal>("MAX_SAVINGS");
   const [minBatteryReserve, setMinBatteryReserve] = useState(20);
+  const [copilotStatus, setCopilotStatus] = useState("No manual action taken yet.");
   const hour = now.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const slotIndex = getCurrentSlotIndex();
@@ -170,6 +241,15 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
     minBatteryReserve,
   });
   const activeGoal = GOAL_OPTIONS.find((goal) => goal.id === optimisationGoal);
+  const recommendation = buildCopilotRecommendation({
+    mode,
+    currentPence,
+    bestSlotPence: best.pence,
+    hasBattery,
+    hasGrid,
+    hasEV,
+    optimisationGoal,
+  });
 
   return (
     <div>
@@ -248,6 +328,51 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
             {activeGoal?.label} mode active. Gridly will avoid actions that push below {minBatteryReserve}% battery where possible.
           </div>
         </div>
+      </div>
+
+      <div style={{ margin: "0 20px 16px", background: "#101827", border: "1px solid #1F2937", borderRadius: 16, padding: "14px 16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: "#34D399", fontWeight: 700, letterSpacing: 1.2 }}>ENERGY COPILOT</div>
+          <div style={{ fontSize: 11, color: "#6EE7B7", fontWeight: 700 }}>Live recommendation</div>
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 800, color: "#F9FAFB", marginBottom: 3 }}>{recommendation.title}</div>
+        <div style={{ fontSize: 12, color: "#9CA3AF", marginBottom: 8 }}>{recommendation.reason}</div>
+        <div style={{ fontSize: 11, color: "#34D399", fontWeight: 700, marginBottom: 10 }}>{recommendation.impact}</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <button
+            onClick={() => setCopilotStatus(`Applied: ${recommendation.title}`)}
+            style={{
+              background: "#16A34A20",
+              border: "1px solid #16A34A50",
+              color: "#86EFAC",
+              borderRadius: 10,
+              padding: "8px 10px",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            Do it now
+          </button>
+          <button
+            onClick={() => setCopilotStatus(`Skipped: ${recommendation.title}`)}
+            style={{
+              background: "#0F172A",
+              border: "1px solid #334155",
+              color: "#94A3B8",
+              borderRadius: 10,
+              padding: "8px 10px",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            Not now
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: "#64748B" }}>{copilotStatus}</div>
       </div>
 
       <div style={{ margin: "0 20px 16px", background: "#0B1220", border: "1px solid #1E293B", borderRadius: 16, padding: "14px 16px" }}>
