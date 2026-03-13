@@ -25,7 +25,6 @@ import {
 } from "../pages/SimplifiedDashboard";
 
 
-
 type OptimisationGoal = "MAX_SAVINGS" | "LOWEST_CARBON" | "BATTERY_CARE" | "EV_READY";
 
 const GOAL_OPTIONS: { id: OptimisationGoal; label: string; hint: string }[] = [
@@ -187,6 +186,7 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
   const [optimisationGoal, setOptimisationGoal] = useState<OptimisationGoal>("MAX_SAVINGS");
   const [minBatteryReserve, setMinBatteryReserve] = useState(20);
   const [copilotStatus, setCopilotStatus] = useState("No manual action taken yet.");
+  const [showWhy, setShowWhy] = useState(false);
   const hour = now.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const slotIndex = getCurrentSlotIndex();
@@ -240,7 +240,6 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
     optimisationGoal,
     minBatteryReserve,
   });
-  const activeGoal = GOAL_OPTIONS.find((goal) => goal.id === optimisationGoal);
   const recommendation = buildCopilotRecommendation({
     mode,
     currentPence,
@@ -284,10 +283,18 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
         </div>
       </div>
 
-
       <div style={{ margin: "0 20px 16px", background: "#0E1726", border: "1px solid #1E293B", borderRadius: 16, padding: "14px 16px" }}>
-        <div style={{ fontSize: 10, color: "#93C5FD", fontWeight: 700, letterSpacing: 1.2, marginBottom: 10 }}>OPTIMISATION GOAL</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: "#93C5FD", fontWeight: 700, letterSpacing: 1.2 }}>GRIDLY BRIEF</div>
+          <button
+            onClick={() => setShowWhy((v) => !v)}
+            style={{ background: "none", border: "none", color: "#60A5FA", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
+          >
+            {showWhy ? "Hide details" : "Why this?"}
+          </button>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           {GOAL_OPTIONS.map((goal) => {
             const selected = goal.id === optimisationGoal;
             return (
@@ -295,26 +302,29 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
                 key={goal.id}
                 onClick={() => setOptimisationGoal(goal.id)}
                 style={{
-                  background: selected ? "#1D4ED820" : "#0F172A",
+                  background: selected ? "#1D4ED830" : "#0F172A",
                   border: `1px solid ${selected ? "#60A5FA" : "#1E293B"}`,
-                  borderRadius: 10,
-                  padding: "10px",
-                  textAlign: "left",
+                  borderRadius: 999,
+                  padding: "6px 10px",
+                  color: selected ? "#BFDBFE" : "#94A3B8",
+                  fontSize: 11,
+                  fontWeight: 700,
                   cursor: "pointer",
                   fontFamily: "inherit",
                 }}
               >
-                <div style={{ fontSize: 12, color: selected ? "#BFDBFE" : "#E2E8F0", fontWeight: 700 }}>{goal.label}</div>
-                <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 3 }}>{goal.hint}</div>
+                {goal.label}
               </button>
             );
           })}
         </div>
-        <div style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 10, padding: "10px 12px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 700, letterSpacing: 1 }}>GUARDRAIL</div>
-            <div style={{ fontSize: 12, color: "#E2E8F0", fontWeight: 700 }}>Battery reserve {minBatteryReserve}%</div>
-          </div>
+
+        <div style={{ fontSize: 17, fontWeight: 800, color: "#F9FAFB", marginBottom: 4 }}>{recommendation.title}</div>
+        <div style={{ fontSize: 12, color: "#9CA3AF", marginBottom: 6 }}>{recommendation.reason}</div>
+        <div style={{ fontSize: 11, color: "#34D399", fontWeight: 700, marginBottom: 10 }}>{recommendation.impact}</div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: "#94A3B8" }}>Reserve floor: <span style={{ color: "#E2E8F0", fontWeight: 700 }}>{minBatteryReserve}%</span></div>
           <input
             type="range"
             min={10}
@@ -322,80 +332,35 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
             step={5}
             value={minBatteryReserve}
             onChange={(event) => setMinBatteryReserve(Number(event.target.value))}
-            style={{ width: "100%" }}
+            style={{ width: 140 }}
           />
-          <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 6 }}>
-            {activeGoal?.label} mode active. Gridly will avoid actions that push below {minBatteryReserve}% battery where possible.
-          </div>
         </div>
-      </div>
 
-      <div style={{ margin: "0 20px 16px", background: "#101827", border: "1px solid #1F2937", borderRadius: 16, padding: "14px 16px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={{ fontSize: 10, color: "#34D399", fontWeight: 700, letterSpacing: 1.2 }}>ENERGY COPILOT</div>
-          <div style={{ fontSize: 11, color: "#6EE7B7", fontWeight: 700 }}>Live recommendation</div>
-        </div>
-        <div style={{ fontSize: 15, fontWeight: 800, color: "#F9FAFB", marginBottom: 3 }}>{recommendation.title}</div>
-        <div style={{ fontSize: 12, color: "#9CA3AF", marginBottom: 8 }}>{recommendation.reason}</div>
-        <div style={{ fontSize: 11, color: "#34D399", fontWeight: 700, marginBottom: 10 }}>{recommendation.impact}</div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
           <button
             onClick={() => setCopilotStatus(`Applied: ${recommendation.title}`)}
-            style={{
-              background: "#16A34A20",
-              border: "1px solid #16A34A50",
-              color: "#86EFAC",
-              borderRadius: 10,
-              padding: "8px 10px",
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: "pointer",
-              fontFamily: "inherit",
-            }}
+            style={{ background: "#16A34A20", border: "1px solid #16A34A50", color: "#86EFAC", borderRadius: 10, padding: "8px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
           >
             Do it now
           </button>
           <button
             onClick={() => setCopilotStatus(`Skipped: ${recommendation.title}`)}
-            style={{
-              background: "#0F172A",
-              border: "1px solid #334155",
-              color: "#94A3B8",
-              borderRadius: 10,
-              padding: "8px 10px",
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: "pointer",
-              fontFamily: "inherit",
-            }}
+            style={{ background: "#0F172A", border: "1px solid #334155", color: "#94A3B8", borderRadius: 10, padding: "8px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
           >
             Not now
           </button>
         </div>
         <div style={{ fontSize: 11, color: "#64748B" }}>{copilotStatus}</div>
-      </div>
 
-      <div style={{ margin: "0 20px 16px", background: "#0B1220", border: "1px solid #1E293B", borderRadius: 16, padding: "14px 16px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontSize: 10, color: "#60A5FA", fontWeight: 700, letterSpacing: 1.2 }}>WHY GRIDLY CHOSE THIS</div>
-          <div style={{ fontSize: 11, color: "#BFDBFE", fontWeight: 700 }}>Confidence {explainability.confidence}%</div>
-        </div>
-        <div style={{ display: "grid", gap: 8, marginBottom: 10 }}>
-          {explainability.signals.map((signal) => (
-            <div key={signal} style={{ fontSize: 12, color: "#CBD5E1", background: "#0F172A", border: "1px solid #1E293B", borderRadius: 10, padding: "8px 10px" }}>
-              {signal}
+        {showWhy && (
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #1E293B" }}>
+            <div style={{ fontSize: 11, color: "#BFDBFE", fontWeight: 700, marginBottom: 6 }}>Confidence {explainability.confidence}%</div>
+            <div style={{ fontSize: 11, color: "#94A3B8", lineHeight: 1.5, marginBottom: 4 }}>{explainability.signals.slice(0, 3).join(" • ")}</div>
+            <div style={{ fontSize: 11, color: "#94A3B8" }}>
+              Alternative: <span style={{ color: "#E2E8F0" }}>{explainability.alternativeAction}</span> ({explainability.altImpact})
             </div>
-          ))}
-        </div>
-        <div style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
-          <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>ALTERNATIVE CONSIDERED</div>
-          <div style={{ fontSize: 13, color: "#E2E8F0", fontWeight: 700 }}>{explainability.alternativeAction}</div>
-          <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>{explainability.altImpact}</div>
-        </div>
-        <div style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 10, padding: "10px 12px" }}>
-          <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>IF GRIDLY DID NOTHING</div>
-          <div style={{ fontSize: 11, color: "#CBD5E1", lineHeight: 1.5 }}>{explainability.doNothingImpact}</div>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* All-time counter */}
