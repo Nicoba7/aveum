@@ -1,3 +1,4 @@
+import { useState } from "react";
 import FlowDot from "./FlowDot";
 import { getGridlyMode, getModeDescription } from "../lib/gridlyEngine";
 import { Battery, Home, Sun, TrendingUp, Zap } from "lucide-react";
@@ -23,6 +24,17 @@ import {
   DeviceConfig,
 } from "../pages/SimplifiedDashboard";
 
+
+
+type OptimisationGoal = "MAX_SAVINGS" | "LOWEST_CARBON" | "BATTERY_CARE" | "EV_READY";
+
+const GOAL_OPTIONS: { id: OptimisationGoal; label: string; hint: string }[] = [
+  { id: "MAX_SAVINGS", label: "Save most", hint: "Prioritise lowest cost and export value" },
+  { id: "LOWEST_CARBON", label: "Lowest carbon", hint: "Shift usage into cleaner grid windows" },
+  { id: "BATTERY_CARE", label: "Battery care", hint: "Reduce deep cycling to extend lifespan" },
+  { id: "EV_READY", label: "EV ready", hint: "Prioritise hitting your ready-by target" },
+];
+
 type ExplainabilityInput = {
   mode: ReturnType<typeof getGridlyMode>;
   currentPence: number;
@@ -34,6 +46,8 @@ type ExplainabilityInput = {
   hasEV: boolean;
   hasSolar: boolean;
   hasGrid: boolean;
+  optimisationGoal: OptimisationGoal;
+  minBatteryReserve: number;
 };
 
 function buildExplainability(input: ExplainabilityInput) {
@@ -48,6 +62,8 @@ function buildExplainability(input: ExplainabilityInput) {
     hasEV,
     hasSolar,
     hasGrid,
+    optimisationGoal,
+    minBatteryReserve,
   } = input;
 
   const expensive = currentPence >= 30;
@@ -90,12 +106,16 @@ function buildExplainability(input: ExplainabilityInput) {
     `Solar: ${hasSolar ? `${(solarW / 1000).toFixed(1)}kW` : "Not connected"}`,
     `EV target gap: ${hasEV ? `${evGap}%` : "No EV connected"}`,
     `Export path: ${hasGrid ? "Available" : "Unavailable"}`,
+    `Goal: ${GOAL_OPTIONS.find((goal) => goal.id === optimisationGoal)?.label ?? "Custom"}`,
+    `Min battery reserve: ${minBatteryReserve}%`,
   ];
 
   return { confidence, alternativeAction, altImpact, doNothingImpact, signals };
 }
 
 export default function HomeTab({ connectedDevices, now }: { connectedDevices: DeviceConfig[]; now: Date }) {
+  const [optimisationGoal, setOptimisationGoal] = useState<OptimisationGoal>("MAX_SAVINGS");
+  const [minBatteryReserve, setMinBatteryReserve] = useState(20);
   const hour = now.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const slotIndex = getCurrentSlotIndex();
@@ -146,7 +166,10 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
     hasEV,
     hasSolar,
     hasGrid,
+    optimisationGoal,
+    minBatteryReserve,
   });
+  const activeGoal = GOAL_OPTIONS.find((goal) => goal.id === optimisationGoal);
 
   return (
     <div>
@@ -178,6 +201,52 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
             evTargetPct: evState.targetPct,
             readyByHour: evState.readyByHour,
           })}
+        </div>
+      </div>
+
+
+      <div style={{ margin: "0 20px 16px", background: "#0E1726", border: "1px solid #1E293B", borderRadius: 16, padding: "14px 16px" }}>
+        <div style={{ fontSize: 10, color: "#93C5FD", fontWeight: 700, letterSpacing: 1.2, marginBottom: 10 }}>OPTIMISATION GOAL</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+          {GOAL_OPTIONS.map((goal) => {
+            const selected = goal.id === optimisationGoal;
+            return (
+              <button
+                key={goal.id}
+                onClick={() => setOptimisationGoal(goal.id)}
+                style={{
+                  background: selected ? "#1D4ED820" : "#0F172A",
+                  border: `1px solid ${selected ? "#60A5FA" : "#1E293B"}`,
+                  borderRadius: 10,
+                  padding: "10px",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                <div style={{ fontSize: 12, color: selected ? "#BFDBFE" : "#E2E8F0", fontWeight: 700 }}>{goal.label}</div>
+                <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 3 }}>{goal.hint}</div>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ background: "#0F172A", border: "1px solid #1E293B", borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontSize: 10, color: "#94A3B8", fontWeight: 700, letterSpacing: 1 }}>GUARDRAIL</div>
+            <div style={{ fontSize: 12, color: "#E2E8F0", fontWeight: 700 }}>Battery reserve {minBatteryReserve}%</div>
+          </div>
+          <input
+            type="range"
+            min={10}
+            max={50}
+            step={5}
+            value={minBatteryReserve}
+            onChange={(event) => setMinBatteryReserve(Number(event.target.value))}
+            style={{ width: "100%" }}
+          />
+          <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 6 }}>
+            {activeGoal?.label} mode active. Gridly will avoid actions that push below {minBatteryReserve}% battery where possible.
+          </div>
         </div>
       </div>
 
