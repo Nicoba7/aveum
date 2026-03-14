@@ -11,8 +11,8 @@ import {
 import { Battery, Home, Sun, TrendingUp, Zap } from "lucide-react";
 import TomorrowForecast from "../pages/TomorrowForecast";
 import { buildDayPlan } from "../lib/dayPlanner";
+import { AGILE_RATES } from "../data/agileRates";
 import {
-  AGILE_RATES,
   SANDBOX,
   getCurrentSlotIndex,
   getBestChargeSlot,

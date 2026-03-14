@@ -2,46 +2,70 @@ import { useAgileRates } from "../hooks/useAgileRates";
 import { useState } from "react";
 import TomorrowForecast from "../pages/TomorrowForecast";
 import { SANDBOX, DeviceConfig } from "../pages/SimplifiedDashboard";
-import { buildGridlyPlan } from "../lib/gridlyPlan";
-
+import { buildGridlyPlan, ConnectedDeviceId, OptimisationMode } from "../lib/gridlyPlan";
+import {
+  buildAIInsightViewModel,
+  buildPlanHeroViewModel,
+  buildPlanSummaryViewModel,
+  buildPlanTimelineViewModel,
+  buildOptimisationModeViewModel,
+  buildPriceWindowsViewModel,
+} from "./plan/planViewModels";
+import AIInsightCard from "./plan/AIInsightCard";
+import AIPlanSummaryCard from "./plan/AIPlanSummaryCard";
+import AskGridlyCard from "./plan/AskGridlyCard";
+import OptimisationModeSelector from "./plan/OptimisationModeSelector";
+import PlanHeroCard from "./plan/PlanHeroCard";
+import PlanTimelineCard from "./plan/PlanTimelineCard";
+import PriceWindowsCard from "./plan/PriceWindowsCard";
 
 function getCurrentSlotIndex() {
   const now = new Date();
   return Math.min(Math.floor((now.getHours() * 60 + now.getMinutes()) / 30), 47);
 }
 
-function getBarColor(p: number) {
-  if (p < 10) return "#22C55E";
-  if (p < 20) return "#F59E0B";
-  if (p < 30) return "#F97316";
-  return "#EF4444";
-}
-
 export default function PlanTab({ connectedDevices }: { connectedDevices: DeviceConfig[] }) {
-  const { rates, error } = useAgileRates();
+  const { rates, loading, error, status } = useAgileRates();
   const currentSlot = getCurrentSlotIndex();
-  const maxPence = Math.max(...rates.map(r => r.pence));
-  const minPence = Math.min(...rates.map(r => r.pence));
-  const [hovered, setHovered] = useState<number | null>(null);
+  const [optimisationMode, setOptimisationMode] = useState<OptimisationMode>("BALANCED");
 
-  const hasRates = Array.isArray(rates) && rates.length > 0;
+  const pricingStatus = status;
   const forecastKwh = SANDBOX?.solarForecast?.kwh ?? 0;
 
-  if (!hasRates) {
-    return (
-      <div style={{ padding: "44px 24px 0", color: "#9CA3AF" }}>
-        Plan data is temporarily unavailable.
-      </div>
-    );
-  }
+  const connectedDeviceIds = connectedDevices.map((d) => d.id) as ConnectedDeviceId[];
+  const { plan, summary, gridlySummary } = buildGridlyPlan(rates, connectedDeviceIds, forecastKwh, optimisationMode, {
+    batteryCapacityKwh: 10,
+    batteryStartPct: SANDBOX?.solar?.batteryPct ?? 55,
+    batteryReservePct: optimisationMode === "GREENEST" ? 35 : optimisationMode === "BALANCED" ? 30 : 22,
+    maxBatteryCyclesPerDay: optimisationMode === "GREENEST" ? 1 : 2,
+    evTargetKwh: 16,
+    evReadyBy: "07:00",
+    exportPriceRatio: 0.72,
+    nowSlotIndex: currentSlot,
+    carbonIntensity: SANDBOX?.carbonIntensity,
+  });
 
-  const connectedDeviceIds = connectedDevices.map(d => d.id) as ("solar" | "battery" | "ev" | "grid")[];
-  const { plan, summary } = buildGridlyPlan(
-    rates,
-    connectedDeviceIds,
-    forecastKwh
-  );
-  const projectedValue = (summary.projectedEarnings + summary.projectedSavings).toFixed(2);
+  const heroViewModel = buildPlanHeroViewModel({
+    summary,
+    gridlySummary,
+    plan,
+    pricingStatus,
+    loading,
+  });
+
+  const timelineViewModel = buildPlanTimelineViewModel(plan, connectedDeviceIds, optimisationMode);
+  const priceWindowsViewModel = buildPriceWindowsViewModel(summary, plan.find((s) => s.action === "SOLAR"), forecastKwh);
+  const planSummaryViewModel = buildPlanSummaryViewModel({
+    summary,
+    gridlySummary,
+  });
+  const insightViewModel = buildAIInsightViewModel({
+    gridlySummary,
+    summary,
+    pricingStatus,
+    mode: optimisationMode,
+  });
+  const optimisationModeViewModel = buildOptimisationModeViewModel(optimisationMode);
 
   return (
     <div style={{ padding: "44px 0 0" }}>
@@ -50,98 +74,16 @@ export default function PlanTab({ connectedDevices }: { connectedDevices: Device
         <div style={{ fontSize: 13, color: "#6B7280" }}>Already sorted — nothing you need to do</div>
       </div>
 
-      {error && (
-        <div style={{ margin: "0 20px 12px", fontSize: 11, color: "#6B7280", textAlign: "center" }}>
-          {error}
-        </div>
-      )}
-
-      <div style={{ margin: "0 20px 16px", background: "#0D1F14", border: "1px solid #16A34A30", borderRadius: 16, padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontSize: 13, color: "#9CA3AF" }}>Projected value tonight</div>
-        <div style={{ fontSize: 22, fontWeight: 900, color: "#22C55E" }}>+£{projectedValue}</div>
-      </div>
-
+      <PlanHeroCard viewModel={heroViewModel} />
+      {gridlySummary.showPriceChart && <PriceWindowsCard viewModel={priceWindowsViewModel} rates={rates} currentSlot={currentSlot} />}
       <div style={{ margin: "0 20px" }}>
         <TomorrowForecast />
       </div>
-
-      <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "16px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1 }}>ENERGY PRICES RIGHT NOW</div>
-          <div style={{ fontSize: 12, color: "#9CA3AF" }}>
-            Now: <span style={{ color: getBarColor(rates[currentSlot]?.pence ?? 0), fontWeight: 700 }}>{rates[currentSlot]?.pence ?? "—"}p</span>
-          </div>
-        </div>
-
-        {hovered !== null && (
-          <div style={{ fontSize: 11, color: "#F9FAFB", background: "#1F2937", borderRadius: 6, padding: "3px 8px", display: "inline-block", marginBottom: 6 }}>
-            {rates[hovered].time} · <span style={{ color: getBarColor(rates[hovered].pence), fontWeight: 700 }}>{rates[hovered].pence}p</span>
-          </div>
-        )}
-
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 72 }}>
-          {rates.map((r, i) => (
-            <div
-              key={i}
-              onMouseEnter={() => setHovered(i)}
-              onMouseLeave={() => setHovered(null)}
-              style={{ flex: 1, height: "100%", display: "flex", alignItems: "flex-end", cursor: "pointer" }}
-            >
-              <div
-                style={{
-                  width: "100%",
-                  height: Math.max(2, (r.pence / maxPence) * 72),
-                  background: r.pence === minPence ? "#22C55E" : i === currentSlot ? "#fff" : getBarColor(r.pence),
-                  opacity: hovered !== null && hovered !== i ? 0.3 : 1,
-                  borderRadius: "2px 2px 0 0",
-                  transition: "opacity 0.1s"
-                }}
-              />
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", marginTop: 4 }}>
-          {rates.map((r, i) => (
-            <div key={i} style={{ flex: 1, fontSize: 8, textAlign: "center", color: i === currentSlot ? "#fff" : "#374151" }}>
-              {i % 4 === 0 ? r.time.split(":")[0] : ""}
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: "#4B5563" }}>
-          <span>🟢 Cheapest: <span style={{ color: "#22C55E", fontWeight: 700 }}>{minPence}p</span></span>
-          <span>🔴 Peak: <span style={{ color: "#EF4444", fontWeight: 700 }}>{maxPence}p</span></span>
-        </div>
-      </div>
-
-      <div style={{ margin: "0 20px" }}>
-        <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 12 }}>WHAT GRIDLY IS DOING TONIGHT</div>
-        {plan
-          .filter(slot => slot.requires.length === 0 || slot.requires.some(r => connectedDevices.some(d => d.id === r)))
-          .map((slot, i, arr) => {
-            const isLast = i === arr.length - 1;
-            return (
-              <div key={i} style={{ display: "flex", gap: 14 }}>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 36, flexShrink: 0 }}>
-                  <div style={{ width: 32, height: 32, borderRadius: 10, background: `${slot.color}15`, border: `1.5px solid ${slot.color}30`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
-                    {slot.action === "CHARGE" ? "⚡" : slot.action === "EXPORT" ? "💰" : slot.action === "SOLAR" ? "☀️" : "⏸"}
-                  </div>
-                  {!isLast && <div style={{ width: 1.5, flex: 1, background: "#1F2937", minHeight: 20 }} />}
-                </div>
-
-                <div style={{ flex: 1, paddingBottom: isLast ? 0 : 16 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB", marginBottom: 2 }}>{slot.title}</div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: slot.color, flexShrink: 0, marginLeft: 8 }}>{slot.price}p</div>
-                  </div>
-                  <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 2 }}>{slot.reason}</div>
-                  <div style={{ fontSize: 10, color: "#374151" }}>{slot.time}</div>
-                </div>
-              </div>
-            );
-          })}
-      </div>
+      <AIPlanSummaryCard viewModel={planSummaryViewModel} />
+      <OptimisationModeSelector viewModel={optimisationModeViewModel} onChange={setOptimisationMode} />
+      <PlanTimelineCard viewModel={timelineViewModel} />
+      {insightViewModel && <AIInsightCard viewModel={insightViewModel} />}
+      <AskGridlyCard />
     </div>
   );
 }
