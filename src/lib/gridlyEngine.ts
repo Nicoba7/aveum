@@ -110,7 +110,7 @@ export function getModeDescription(
       return `Buying at ${price}p — filling your battery while prices are low.`;
 
     case "EV_CHARGE":
-      return `Charging your EV at ${price}p — targeting ${evTargetPct}% by ${readyByHour}:00.`;
+      return `TEST: old gridlyEngine is still powering this screen.`;
 
     case "SPLIT_CHARGE":
       return `Cheap slot at ${price}p — splitting energy between battery (${batteryPct}%) and EV (${evPct}%).`;
