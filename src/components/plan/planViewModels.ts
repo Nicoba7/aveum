@@ -74,7 +74,7 @@ function coreActionFromSessionType(sessionType: GridlyPlanSession["type"]) {
   return "hold" as const;
 }
 
-function sessionActionLabel(sessionType: GridlyPlanSession["type"]) {
+export function getSessionActionLabel(sessionType: GridlyPlanSession["type"]) {
   if (sessionType === "battery_charge") return "Battery charging overnight";
   if (sessionType === "ev_charge") return "Charging EV overnight";
   if (sessionType === "export") return "Selling energy during peak prices";
@@ -126,12 +126,99 @@ function compactReason(
 }
 
 function formatSessionOutcome(session: GridlyPlanSession) {
-  return sessionActionLabel(session.type);
+  return getSessionActionLabel(session.type);
 }
 
 export function selectDisplaySessions(sessions: GridlyPlanSession[]) {
   const actionable = sessions.filter((session) => session.type !== "hold");
   return actionable.length ? actionable : sessions;
+}
+
+function toSlotIndex(time: string) {
+  const [hours, minutes] = time.split(":").map(Number);
+  return (hours * 2) + (minutes >= 30 ? 1 : 0);
+}
+
+function toHHMM(slotIndex: number) {
+  const normalized = ((slotIndex % 48) + 48) % 48;
+  const hours = String(Math.floor(normalized / 2)).padStart(2, "0");
+  const minutes = normalized % 2 === 0 ? "00" : "30";
+  return `${hours}:${minutes}`;
+}
+
+function formatPriceRange(min: number, max: number) {
+  return min === max ? `${min.toFixed(1)}p` : `${min.toFixed(1)}–${max.toFixed(1)}p`;
+}
+
+function mergeSessionGroup(sessions: GridlyPlanSession[]): GridlyPlanSession {
+  const sorted = [...sessions].sort((a, b) => toSlotIndex(a.start) - toSlotIndex(b.start));
+  const first = sorted[0];
+  const minStart = Math.min(...sorted.map((session) => toSlotIndex(session.start)));
+  const maxEnd = Math.max(...sorted.map((session) => toSlotIndex(session.end)));
+  const priceMin = Math.min(...sorted.map((session) => session.priceMin));
+  const priceMax = Math.max(...sorted.map((session) => session.priceMax));
+
+  return {
+    type: first.type,
+    start: toHHMM(minStart),
+    end: toHHMM(maxEnd),
+    priceRange: formatPriceRange(priceMin, priceMax),
+    priceMin,
+    priceMax,
+    color: first.color,
+    highlight: sorted.some((session) => session.highlight),
+    slotCount: sorted.reduce((total, session) => total + session.slotCount, 0),
+  };
+}
+
+function isOvernightSession(session: GridlyPlanSession) {
+  const start = toSlotIndex(session.start);
+  const end = toSlotIndex(session.end);
+  return start >= 44 || start < 16 || end <= 16;
+}
+
+export function groupDisplaySessions(sessions: GridlyPlanSession[]) {
+  if (sessions.length <= 1) return sessions;
+
+  const sorted = [...sessions].sort((a, b) => toSlotIndex(a.start) - toSlotIndex(b.start));
+  const overnightChargeTypes = new Set<GridlyPlanSession["type"]>(["battery_charge", "ev_charge"]);
+
+  const overnightGrouped: GridlyPlanSession[] = [];
+  for (const type of overnightChargeTypes) {
+    const matching = sorted.filter((session) => session.type === type && isOvernightSession(session));
+    if (matching.length) overnightGrouped.push(mergeSessionGroup(matching));
+  }
+
+  const usedOvernight = new Set(
+    sorted
+      .filter((session) => overnightChargeTypes.has(session.type) && isOvernightSession(session))
+      .map((session) => `${session.type}|${session.start}|${session.end}`)
+  );
+
+  const remainder = sorted.filter(
+    (session) => !usedOvernight.has(`${session.type}|${session.start}|${session.end}`)
+  );
+
+  const mergedRemainder: GridlyPlanSession[] = [];
+  for (const session of remainder) {
+    const last = mergedRemainder[mergedRemainder.length - 1];
+    if (!last) {
+      mergedRemainder.push(session);
+      continue;
+    }
+
+    const sameType = last.type === session.type;
+    const gap = toSlotIndex(session.start) - toSlotIndex(last.end);
+    const nearAdjacent = gap >= 0 && gap <= 1;
+
+    if (sameType && nearAdjacent) {
+      mergedRemainder[mergedRemainder.length - 1] = mergeSessionGroup([last, session]);
+    } else {
+      mergedRemainder.push(session);
+    }
+  }
+
+  return [...overnightGrouped, ...mergedRemainder].sort((a, b) => toSlotIndex(a.start) - toSlotIndex(b.start));
 }
 
 export function buildPlanHeroViewModel({
@@ -189,7 +276,7 @@ export function buildPlanTimelineViewModel(
       const coreAction = coreActionFromSessionType(session.type);
       return {
         time: formatRange(session.start, session.end),
-        action: sessionActionLabel(session.type),
+        action: getSessionActionLabel(session.type),
         reason: compactReason(coreAction, mode, session.slotCount > 1, {
           hasBattery,
           hasSolar,

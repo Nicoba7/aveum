@@ -10,6 +10,7 @@ import {
   buildPlanTimelineViewModel,
   buildOptimisationModeViewModel,
   buildPriceWindowsViewModel,
+  groupDisplaySessions,
   selectDisplaySessions,
 } from "./plan/planViewModels";
 import AIInsightCard from "./plan/AIInsightCard";
@@ -47,25 +48,26 @@ export default function PlanTab({ connectedDevices }: { connectedDevices: Device
   });
   const sessions = plan.sessions;
   const displaySessions = selectDisplaySessions(sessions);
+  const groupedDisplaySessions = groupDisplaySessions(displaySessions);
 
   if (import.meta.env.DEV) {
-    console.log("Gridly sessions:", displaySessions);
+    console.log("Gridly sessions:", groupedDisplaySessions);
   }
 
   const heroViewModel = buildPlanHeroViewModel({
     summary,
     gridlySummary,
-    sessions: displaySessions,
+    sessions: groupedDisplaySessions,
     pricingStatus,
     loading,
   });
 
-  const timelineViewModel = buildPlanTimelineViewModel(displaySessions, connectedDeviceIds, optimisationMode);
+  const timelineViewModel = buildPlanTimelineViewModel(groupedDisplaySessions, connectedDeviceIds, optimisationMode);
   const priceWindowsViewModel = buildPriceWindowsViewModel(summary, plan.find((s) => s.action === "SOLAR"), forecastKwh);
   const planSummaryViewModel = buildPlanSummaryViewModel({
     summary,
     gridlySummary,
-    sessions: displaySessions,
+    sessions: groupedDisplaySessions,
   });
   const insightViewModel = buildAIInsightViewModel({
     gridlySummary,
@@ -85,7 +87,7 @@ export default function PlanTab({ connectedDevices }: { connectedDevices: Device
       <PlanHeroCard viewModel={heroViewModel} />
       {gridlySummary.showPriceChart && <PriceWindowsCard viewModel={priceWindowsViewModel} rates={rates} currentSlot={currentSlot} />}
       <div style={{ margin: "0 20px" }}>
-        <TomorrowForecast />
+        <TomorrowForecast sessions={groupedDisplaySessions} />
       </div>
       <AIPlanSummaryCard viewModel={planSummaryViewModel} />
       <OptimisationModeSelector viewModel={optimisationModeViewModel} onChange={setOptimisationMode} />

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { Sun, Cloud, CloudRain, TrendingUp, Zap, Battery } from "lucide-react";
+import type { GridlyPlanSession } from "../lib/gridlyPlan";
+import { getSessionActionLabel } from "../components/plan/planViewModels";
 
 // ── SANDBOX FORECAST DATA ─────────────────────────────────────────────────
 // In production: Solcast API for solar, Octopus API for tomorrow's Agile prices
@@ -51,7 +53,27 @@ function getBarColor(p: number) {
 }
 
 // ── MAIN COMPONENT ────────────────────────────────────────────────────────
-export default function TomorrowForecast() {
+function sessionLabel(session: GridlyPlanSession) {
+  return getSessionActionLabel(session.type);
+}
+
+function sessionIcon(session: GridlyPlanSession) {
+  if (session.type === "battery_charge") return <Battery size={15} color="#22C55E" />;
+  if (session.type === "ev_charge") return <Zap size={15} color="#38BDF8" />;
+  if (session.type === "export") return <TrendingUp size={15} color="#F59E0B" />;
+  if (session.type === "solar_use") return <Sun size={15} color="#F59E0B" />;
+  return <Cloud size={15} color="#9CA3AF" />;
+}
+
+function sessionStyles(session: GridlyPlanSession) {
+  if (session.type === "battery_charge") return { bg: "#16A34A10", border: "#16A34A20" };
+  if (session.type === "ev_charge") return { bg: "#38BDF810", border: "#38BDF820" };
+  if (session.type === "export") return { bg: "#F59E0B10", border: "#F59E0B20" };
+  if (session.type === "solar_use") return { bg: "#F59E0B08", border: "#F59E0B15" };
+  return { bg: "#6B728010", border: "#6B728020" };
+}
+
+export default function TomorrowForecast({ sessions }: { sessions: GridlyPlanSession[] }) {
   const [revealed, setRevealed] = useState(false);
   const maxPence = Math.max(...TOMORROW_RATES);
   const f = FORECAST;
@@ -107,22 +129,21 @@ export default function TomorrowForecast() {
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>WHAT GRIDLY WILL DO</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#16A34A10", border: "1px solid #16A34A20", borderRadius: 10, padding: "10px 12px" }}>
-            <Battery size={15} color="#22C55E" />
-            <span style={{ fontSize: 13, color: "#E5E7EB" }}>Battery full by <strong style={{ color: "#22C55E" }}>{f.forecast.batteryFullBy}</strong> at {f.prices.cheapestSlot.pence}p</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#F59E0B10", border: "1px solid #F59E0B20", borderRadius: 10, padding: "10px 12px" }}>
-            <TrendingUp size={15} color="#F59E0B" />
-            <span style={{ fontSize: 13, color: "#E5E7EB" }}>Selling to grid <strong style={{ color: "#F59E0B" }}>{f.forecast.exportWindow}</strong> at {f.prices.peakSlot.pence}p</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#38BDF810", border: "1px solid #38BDF820", borderRadius: 10, padding: "10px 12px" }}>
-            <Zap size={15} color="#38BDF8" />
-            <span style={{ fontSize: 13, color: "#E5E7EB" }}>EV charged by <strong style={{ color: "#38BDF8" }}>{f.forecast.evChargeBy}</strong> at cheapest rate</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#F59E0B08", border: "1px solid #F59E0B15", borderRadius: 10, padding: "10px 12px" }}>
-            <Sun size={15} color="#F59E0B" />
-            <span style={{ fontSize: 13, color: "#E5E7EB" }}><strong style={{ color: "#F59E0B" }}>{f.solar.expectedKwh}kWh</strong> solar expected, peak at {f.solar.peakHour}</span>
-          </div>
+          {sessions.map((session, index) => {
+            const style = sessionStyles(session);
+            return (
+              <div
+                key={`${session.type}-${session.start}-${session.end}-${index}`}
+                style={{ display: "flex", alignItems: "center", gap: 10, background: style.bg, border: `1px solid ${style.border}`, borderRadius: 10, padding: "10px 12px" }}
+              >
+                {sessionIcon(session)}
+                <span style={{ fontSize: 13, color: "#E5E7EB" }}>
+                  {sessionLabel(session)} <strong style={{ color: session.color }}>{session.start}–{session.end}</strong>
+                  {session.priceRange ? ` at ${session.priceRange}` : ""}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
