@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 import { Sun, Zap, Battery, PoundSterling, TrendingUp, RefreshCw, Wifi, WifiOff, ChevronRight, AlertCircle, Settings } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import GridlySetup from "./GridlySetup";
+import { optimizePlan } from "../engine/core/optimizePlan";
+import { explainPlan } from "../engine/core/explainPlan";
+import { mapEngineToHome } from "../features/home/mapEngineToHome";
 
 // ── SANDBOX DATA ──────────────────────────────────────────────────────────
 const SANDBOX = {
@@ -48,25 +51,68 @@ function getNextRates(rates: Rate[], n = 6): Rate[] {
   return rates.filter((r) => r.from > now).slice(0, n);
 }
 
-// ── OPTIMISATION ENGINE ───────────────────────────────────────────────────
-function optimise({ currentRate, nextRates, battery, ev }: {
-  currentRate: Rate | null; nextRates: Rate[]; battery: { pct: number }; ev: { pct: number };
-}) {
-  if (!currentRate) return { action: "HOLD", reason: "Waiting for price data", color: "#6B7280" };
-  const p = currentRate.pence;
-  const avgNext = nextRates.length ? nextRates.reduce((s, r) => s + r.pence, 0) / nextRates.length : p;
-  const batteryLow = battery.pct < 20;
-  const batteryFull = battery.pct > 90;
-  const evNeeded = ev.pct < 80;
+function buildEngineInput(rates: Rate[], g: typeof SANDBOX.givenergy) {
+  const forecastLoadKwh = rates.map(() => Math.max(g.consumptionW / 1000 / 2, 0.4));
+  const forecastSolarKwh = rates.map((rate) => {
+    const hour = rate.from.getHours() + rate.from.getMinutes() / 60;
 
-  if (p < 0) return { action: "CHARGING", reason: `Electricity is free right now — filling everything up`, color: "#16A34A" };
-  if (p < 10 && !batteryFull) return { action: "CHARGING BATTERY", reason: `Electricity is cheap (${p.toFixed(0)}p) — storing it for later`, color: "#22C55E" };
-  if (p < 15 && evNeeded) return { action: "CHARGING CAR", reason: `Good rate (${p.toFixed(0)}p) — topping up your EV`, color: "#38BDF8" };
-  if (p > 28 && !batteryLow) return { action: "SELLING", reason: `Price is high (${p.toFixed(0)}p) — selling stored energy to the grid`, color: "#F59E0B" };
-  if (p > avgNext + 5 && !batteryLow) return { action: "SELLING", reason: `Price above average — exporting to earn more`, color: "#F59E0B" };
-  return { action: "HOLDING", reason: `Price is ${p.toFixed(0)}p — waiting for a better time to act`, color: "#6B7280" };
+    if (hour < 6 || hour > 19) {
+      return 0;
+    }
+
+    if (hour >= 11 && hour <= 15) {
+      return 2.8;
+    }
+
+    if ((hour >= 9 && hour < 11) || (hour > 15 && hour <= 17)) {
+      return 1.6;
+    }
+
+    return 0.6;
+  });
+
+  const importPrice = rates.map((rate) => rate.pence / 100);
+  const exportPrice = rates.map((rate) => Math.max(0.05, rate.pence / 100 - 0.03));
+
+  return {
+    batterySocPercent: g.batteryPct,
+    forecastLoadKwh,
+    forecastSolarKwh,
+    importPrice,
+    exportPrice,
+  };
 }
 
+function actionToColor(action?: string): string {
+  switch (action) {
+    case "charge":
+      return "#22C55E";
+    case "export":
+      return "#F59E0B";
+    case "discharge":
+      return "#38BDF8";
+    case "import":
+      return "#38BDF8";
+    default:
+      return "#6B7280";
+  }
+}
+
+function actionToLabel(action?: string): string {
+  switch (action) {
+    case "charge":
+      return "CHARGING";
+    case "export":
+      return "SELLING";
+    case "discharge":
+      return "DISCHARGING";
+    case "import":
+      return "IMPORTING";
+    case "hold":
+    default:
+      return "HOLDING";
+  }
+}
 // ── HELPERS ───────────────────────────────────────────────────────────────
 function calcTodaySavings(g: typeof SANDBOX.givenergy) {
   const exportEarned = g.todayExportKwh * 0.15;
@@ -142,7 +188,17 @@ const Index = () => {
   const currentRate = getCurrentRate(rates);
   const nextRates = getNextRates(rates, 8);
   const displayRates = currentRate ? [currentRate, ...nextRates] : nextRates;
-  const opt = optimise({ currentRate, nextRates, battery: { pct: g.batteryPct }, ev: { pct: z.evPct } });
+  const engineInput = buildEngineInput(rates, g);
+  const engineOutput = optimizePlan(engineInput);
+  const homeView = mapEngineToHome(engineOutput);
+  const planExplanation = explainPlan(engineOutput);
+
+  const primaryRecommendation = engineOutput.recommendations[0];
+  const opt = {
+    action: actionToLabel(primaryRecommendation?.action),
+    reason: engineOutput.subheadline ?? planExplanation.shortReason ?? "Gridly is evaluating the best time to act.",
+    color: actionToColor(primaryRecommendation?.action),
+  };  
   const savedToday = calcTodaySavings(g);
   const connectedDevices = ALL_DEVICES.filter(d => d.connected);
   const nextDevice = ALL_DEVICES.find(d => !d.connected);
@@ -216,8 +272,27 @@ const Index = () => {
           <span style={{ fontSize: 10, color: opt.color, fontWeight: 700, letterSpacing: 1.5 }}>RIGHT NOW</span>
           <span style={{ fontSize: 10, color: "#4B5563" }}>Auto-updates every 30 min</span>
         </div>
-        <div style={{ fontSize: 20, fontWeight: 800, color: opt.color, letterSpacing: -0.5 }}>{opt.action}</div>
-        <div style={{ fontSize: 12, color: "#9CA3AF", marginTop: 3 }}>{opt.reason}</div>
+        <div style={{ fontSize: 20, fontWeight: 800, color: opt.color, letterSpacing: -0.5 }}>
+           {homeView.headline}
+        </div>
+        <div style={{ fontSize: 12, color: "#9CA3AF", marginTop: 3 }}>
+            {homeView.subheadline ?? opt.reason}
+        </div>
+        <div style={{ display: "flex", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+          {homeView.savings !== undefined && (
+            <span style={{ fontSize: 11, color: "#22C55E", fontWeight: 700 }}>
+              Saving est. £{homeView.savings.toFixed(2)}
+            </span>
+          )}
+          {planExplanation.confidenceLabel && (
+            <span style={{ fontSize: 11, color: "#9CA3AF" }}>
+              {planExplanation.confidenceLabel}
+            </span>
+          )}
+          <span style={{ fontSize: 11, color: "#6B7280" }}>
+            {homeView.actionCount} planned actions
+          </span>
+        </div>
       </div>
 
       {/* NEXT UNLOCK — the one clear CTA */}

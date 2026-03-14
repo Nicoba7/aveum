@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import FlowDot from "./FlowDot";
-import { getGridlyMode, getModeDescription } from "../lib/gridlyEngine";
+import { optimizePlan } from "../engine/core/optimizePlan";
+import { explainPlan } from "../engine/core/explainPlan";
+import { mapEngineToHome } from "../features/home/mapEngineToHome";
 import {
   buildAiRecommendation,
   recordAiFeedback,
@@ -12,7 +14,6 @@ import { buildDayPlan } from "../lib/dayPlanner";
 import {
   AGILE_RATES,
   SANDBOX,
-  MODE_CONFIG,
   getCurrentSlotIndex,
   getBestChargeSlot,
   DeviceHealthAlerts,
@@ -30,6 +31,35 @@ import {
   DeviceConfig,
 } from "../pages/SimplifiedDashboard";
 
+function actionToColor(action?: string): string {
+  switch (action) {
+    case "charge":
+      return "#22C55E";
+    case "export":
+      return "#F59E0B";
+    case "discharge":
+    case "import":
+      return "#38BDF8";
+    default:
+      return "#6B7280";
+  }
+}
+
+function actionToLabel(action?: string): string {
+  switch (action) {
+    case "charge":
+      return "CHARGING";
+    case "export":
+      return "SELLING";
+    case "discharge":
+      return "DISCHARGING";
+    case "import":
+      return "IMPORTING";
+    case "hold":
+    default:
+      return "HOLDING";
+  }
+}
 
 const GOAL_OPTIONS: { id: OptimisationGoal; label: string; hint: string }[] = [
   { id: "MAX_SAVINGS", label: "Save most", hint: "Prioritise lowest cost and export value" },
@@ -63,26 +93,39 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
     readyByHour: 7,
   };
 
-  const mode = getGridlyMode({
-    price: currentPence,
-    solarW: s.w,
-    batteryPct: s.batteryPct,
-    hasBattery,
-    hasSolar,
-    hasEV,
-    hasGrid,
-    evConnected: evState.connected,
-    evPct: evState.pct,
-    evTargetPct: evState.targetPct,
-    readyByHour: evState.readyByHour,
-  });
+  const engineInput = {
+    batterySocPercent: s.batteryPct,
+    forecastLoadKwh: Array.from({ length: 8 }, () => Math.max((s.homeW ?? 1200) / 2000, 0.4)),
+    forecastSolarKwh: Array.from({ length: 8 }, (_, i) => {
+      if (!hasSolar) return 0;
+      if (i >= 2 && i <= 4) return 2.8;
+      if (i === 1 || i === 5) return 1.4;
+      return 0.4;
+    }),
+    importPrice: Array.from({ length: 8 }, (_, i) => Math.max(0.05, (currentPence + i * 0.01) / 100)),
+    exportPrice: Array.from({ length: 8 }, (_, i) => Math.max(0.05, (currentPence + i * 0.015) / 100)),
+  };
 
-  const cfg = MODE_CONFIG[mode];
-  const isExporting = mode === "EXPORT" || s.gridW > 0;
-  const isCharging =
-    mode === "CHARGE" ||
-    mode === "EV_CHARGE" ||
-    mode === "SPLIT_CHARGE";
+const engineOutput = optimizePlan(engineInput);
+const homeView = mapEngineToHome(engineOutput);
+const explanation = explainPlan(engineOutput);
+const primaryRecommendation = engineOutput.recommendations[0];
+
+const cfg = {
+  color: actionToColor(primaryRecommendation?.action),
+  border: `${actionToColor(primaryRecommendation?.action)}40`,
+  bg: "#111827",
+  icon:
+    primaryRecommendation?.action === "charge"
+      ? "⚡"
+      : primaryRecommendation?.action === "export"
+      ? "💸"
+      : "⏸",
+  label: homeView.headline ?? actionToLabel(primaryRecommendation?.action),
+};
+const isCharging = primaryRecommendation?.action === "charge";
+const isExporting = primaryRecommendation?.action === "export";
+
   const planner = useMemo(() => {
     const pricesPence = AGILE_RATES.map((rate) => rate.pence);
     const loadKwh = AGILE_RATES.map((_, i) => {
@@ -114,7 +157,11 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
   }, [slotIndex, s.batteryPct, minBatteryReserve, hasGrid]);
 
   const recommendation = buildAiRecommendation({
-    mode,
+    mode: primaryRecommendation?.action === "charge"
+      ? "CHARGE"
+      : primaryRecommendation?.action === "export"
+      ? "EXPORT"
+      :"HOLD",
     currentPence,
     bestSlotPence: best.price,
     hasBattery,
@@ -141,19 +188,24 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
         <div style={{ fontSize: 10, color: cfg.color, fontWeight: 700, letterSpacing: 1.5, marginBottom: 8 }}>RIGHT NOW</div>
         <div style={{ fontSize: 22, fontWeight: 900, color: cfg.color, letterSpacing: -0.5, marginBottom: 4 }}>{cfg.icon} {cfg.label}</div>
         <div style={{ fontSize: 13, color: "#9CA3AF", lineHeight: 1.5 }}>
-          {getModeDescription(mode, {
-            price: currentPence,
-            solarW: s.w,
-            batteryPct: s.batteryPct,
-            hasBattery,
-            hasSolar,
-            hasEV,
-            hasGrid,
-            evConnected: evState.connected,
-            evPct: evState.pct,
-            evTargetPct: evState.targetPct,
-            readyByHour: evState.readyByHour,
-          })}
+          <>
+              {homeView.subheadline ?? explanation.shortReason ?? "Gridly is evaluating the best time to act."}
+              <div style={{ display: "flex", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+                {homeView.savings !== undefined && (
+                  <span style={{ fontSize: 11, color: "#22C55E", fontWeight: 700 }}>
+                    Saving est. £{homeView.savings.toFixed(2)}
+                  </span>
+                )}
+                {explanation.confidenceLabel && (
+                  <span style={{ fontSize: 11, color: "#9CA3AF" }}>
+                    {explanation.confidenceLabel}
+                  </span>
+                )}
+                <span style={{ fontSize: 11, color: "#6B7280" }}>
+                  {homeView.actionCount} planned actions
+                </span>
+              </div>
+            </>
         </div>
       </div>
 
