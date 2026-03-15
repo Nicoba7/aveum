@@ -1,6 +1,6 @@
 import { useAgileRates } from "../hooks/useAgileRates";
-import { useState } from "react";
-import TomorrowForecast from "../pages/TomorrowForecast";
+import { useMemo, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { SANDBOX, DeviceConfig } from "../pages/SimplifiedDashboard";
 import { buildGridlyPlan, ConnectedDeviceId, OptimisationMode } from "../lib/gridlyPlan";
 import {
@@ -15,54 +15,142 @@ import {
 } from "./plan/planViewModels";
 import AIInsightCard from "./plan/AIInsightCard";
 import AIPlanSummaryCard from "./plan/AIPlanSummaryCard";
-import AskGridlyCard from "./plan/AskGridlyCard";
 import OptimisationModeSelector from "./plan/OptimisationModeSelector";
 import PlanHeroCard from "./plan/PlanHeroCard";
 import PlanTimelineCard from "./plan/PlanTimelineCard";
+import PlanEnergyFlowCard from "./plan/PlanEnergyFlowCard";
 import PriceWindowsCard from "./plan/PriceWindowsCard";
 
-function getCurrentSlotIndex() {
-  const now = new Date();
-  return Math.min(Math.floor((now.getHours() * 60 + now.getMinutes()) / 30), 47);
+const ENABLE_PLAN_SIMULATION = import.meta.env.DEV;
+
+function buildLivePlanContext(now: Date, baseSolarForecastKwh: number, baseBatteryPct: number) {
+  const minuteOfDay = now.getHours() * 60 + now.getMinutes();
+  const dayProgress = minuteOfDay / 1440;
+  const dayPhase = dayProgress * Math.PI * 2;
+
+  const forecastDrift = Math.sin(dayPhase * 1.7) * 1.8;
+  const solarForecastKwh = Math.max(2, Number((baseSolarForecastKwh + forecastDrift).toFixed(1)));
+
+  const batteryDrift = Math.sin(dayPhase - 0.9) * 9;
+  const batteryStartPct = Math.max(12, Math.min(96, Math.round(baseBatteryPct + batteryDrift)));
+
+  return {
+    solarForecastKwh,
+    batteryStartPct,
+  };
 }
 
-export default function PlanTab({ connectedDevices }: { connectedDevices: DeviceConfig[] }) {
-  const { rates, loading, error, status } = useAgileRates();
-  const currentSlot = getCurrentSlotIndex();
+function CollapsibleSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: "100%",
+          background: "none",
+          border: "none",
+          padding: "16px 20px",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <span style={{ fontSize: 12.5, fontWeight: 550, color: "#8795AA", letterSpacing: 0.18 }}>{label}</span>
+        {open ? (
+          <ChevronUp size={14} color="#445066" strokeWidth={2.2} />
+        ) : (
+          <ChevronDown size={14} color="#445066" strokeWidth={2.2} />
+        )}
+      </button>
+      {open && <div style={{ paddingBottom: 8 }}>{children}</div>}
+    </div>
+  );
+}
+
+export default function PlanTab({ connectedDevices, now }: { connectedDevices: DeviceConfig[]; now: Date }) {
+  const { rates, loading, status } = useAgileRates();
+  const currentSlot = Math.min(Math.floor((now.getHours() * 60 + now.getMinutes()) / 30), 47);
   const [optimisationMode, setOptimisationMode] = useState<OptimisationMode>("BALANCED");
+  const planningStyle = optimisationMode;
 
-  const pricingStatus = status;
-  const forecastKwh = SANDBOX?.solarForecast?.kwh ?? 0;
+  const baseForecastKwh = SANDBOX?.solarForecast?.kwh ?? 0;
+  const baseBatteryPct = SANDBOX?.solar?.batteryPct ?? 55;
+  const livePlanContext = useMemo(
+    () => buildLivePlanContext(now, baseForecastKwh, baseBatteryPct),
+    [now, baseForecastKwh, baseBatteryPct]
+  );
 
-  const connectedDeviceIds = connectedDevices.map((d) => d.id) as ConnectedDeviceId[];
-  const { plan, summary, gridlySummary } = buildGridlyPlan(rates, connectedDeviceIds, forecastKwh, optimisationMode, {
-    batteryCapacityKwh: 10,
-    batteryStartPct: SANDBOX?.solar?.batteryPct ?? 55,
-    batteryReservePct: optimisationMode === "GREENEST" ? 35 : optimisationMode === "BALANCED" ? 30 : 22,
-    maxBatteryCyclesPerDay: optimisationMode === "GREENEST" ? 1 : 2,
-    evTargetKwh: 16,
-    evReadyBy: "07:00",
-    exportPriceRatio: 0.72,
-    nowSlotIndex: currentSlot,
-    carbonIntensity: SANDBOX?.carbonIntensity,
-  });
-  const sessions = plan.sessions;
-  const displaySessions = selectDisplaySessions(sessions);
-  const groupedDisplaySessions = groupDisplaySessions(displaySessions);
+  const forecastKwh = ENABLE_PLAN_SIMULATION ? livePlanContext.solarForecastKwh : baseForecastKwh;
+  const batteryStartPct = ENABLE_PLAN_SIMULATION ? livePlanContext.batteryStartPct : baseBatteryPct;
+  const connectedDeviceIds = useMemo(
+    () => connectedDevices.map((d) => d.id) as ConnectedDeviceId[],
+    [connectedDevices]
+  );
+
+  const connectedDeviceKey = connectedDeviceIds.join("|");
+
+  const { plan, summary, gridlySummary } = useMemo(
+    () =>
+      buildGridlyPlan(rates, connectedDeviceIds, forecastKwh, planningStyle, {
+        batteryCapacityKwh: 10,
+        batteryStartPct,
+        batteryReservePct: planningStyle === "GREENEST" ? 35 : planningStyle === "BALANCED" ? 30 : 22,
+        maxBatteryCyclesPerDay: planningStyle === "GREENEST" ? 1 : 2,
+        evTargetKwh: 16,
+        evReadyBy: "07:00",
+        exportPriceRatio: 0.72,
+        nowSlotIndex: currentSlot,
+        carbonIntensity: SANDBOX?.carbonIntensity,
+      }),
+    [rates, connectedDeviceIds, connectedDeviceKey, forecastKwh, planningStyle, currentSlot, batteryStartPct]
+  );
+
+  const groupedDisplaySessions = useMemo(() => {
+    const sessions = plan.sessions;
+    const displaySessions = selectDisplaySessions(sessions);
+    return groupDisplaySessions(displaySessions);
+  }, [plan.sessions, planningStyle]);
 
   if (import.meta.env.DEV) {
     console.log("Gridly sessions:", groupedDisplaySessions);
   }
 
+  const hasSolar = connectedDeviceIds.includes("solar");
+  const hasBattery = connectedDeviceIds.includes("battery");
+  const hasEV = connectedDeviceIds.includes("ev");
+  const hasGrid = connectedDeviceIds.includes("grid");
+  const solarForecastKwh = forecastKwh;
+  const hasBatteryCharge = groupedDisplaySessions.some((s) => s.type === "battery_charge");
+  const projectedBatteryPct = hasBattery
+    ? Math.min(100, batteryStartPct + (hasBatteryCharge ? 28 : 0))
+    : 0;
+
   const heroViewModel = buildPlanHeroViewModel({
     summary,
     gridlySummary,
     sessions: groupedDisplaySessions,
-    pricingStatus,
+    pricingStatus: status,
     loading,
+    solarForecastKwh: forecastKwh,
   });
 
-  const timelineViewModel = buildPlanTimelineViewModel(groupedDisplaySessions, connectedDeviceIds, optimisationMode);
+  const timelineViewModel = buildPlanTimelineViewModel(groupedDisplaySessions, connectedDeviceIds, planningStyle, {
+    solarForecastKwh: forecastKwh,
+    cheapestPrice: summary.cheapestPrice,
+    peakPrice: summary.peakPrice,
+    cheapestWindow: summary.cheapestSlot,
+    peakWindow: summary.peakSlot,
+    evReadyBy: summary.evReadyBy,
+  });
   const priceWindowsViewModel = buildPriceWindowsViewModel(summary, plan.find((s) => s.action === "SOLAR"), forecastKwh);
   const planSummaryViewModel = buildPlanSummaryViewModel({
     summary,
@@ -72,28 +160,55 @@ export default function PlanTab({ connectedDevices }: { connectedDevices: Device
   const insightViewModel = buildAIInsightViewModel({
     gridlySummary,
     summary,
-    pricingStatus,
-    mode: optimisationMode,
+    pricingStatus: status,
+    mode: planningStyle,
   });
-  const optimisationModeViewModel = buildOptimisationModeViewModel(optimisationMode);
+  const optimisationModeViewModel = buildOptimisationModeViewModel(planningStyle);
 
   return (
-    <div style={{ padding: "44px 0 0" }}>
-      <div style={{ padding: "0 24px 20px" }}>
-        <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: -0.8, marginBottom: 2 }}>Tonight's plan</div>
-        <div style={{ fontSize: 13, color: "#6B7280" }}>Already sorted — nothing you need to do</div>
-      </div>
+    <div style={{ background: "#060A12", minHeight: "100vh", paddingBottom: 40 }}>
 
       <PlanHeroCard viewModel={heroViewModel} />
-      {gridlySummary.showPriceChart && <PriceWindowsCard viewModel={priceWindowsViewModel} rates={rates} currentSlot={currentSlot} />}
-      <div style={{ margin: "0 20px" }}>
-        <TomorrowForecast sessions={groupedDisplaySessions} />
+      <PlanEnergyFlowCard
+        hasSolar={hasSolar}
+        hasBattery={hasBattery}
+        hasEV={hasEV}
+        hasGrid={hasGrid}
+        solarForecastKwh={solarForecastKwh}
+        projectedBatteryPct={projectedBatteryPct}
+        sessions={groupedDisplaySessions}
+      />
+      <PlanTimelineCard viewModel={timelineViewModel} nowDate={now} />
+
+      <div style={{ margin: "24px 0 0" }}>
+        {gridlySummary.showPriceChart && (
+          <div style={{ borderTop: "1px solid #0A1020" }}>
+            <CollapsibleSection label="Price Outlook">
+              <PriceWindowsCard
+                viewModel={priceWindowsViewModel}
+                rates={rates}
+                currentSlot={currentSlot}
+                sessions={groupedDisplaySessions}
+              />
+            </CollapsibleSection>
+          </div>
+        )}
+
+        <div style={{ borderTop: "1px solid #0A1020" }}>
+          <CollapsibleSection label="Why this plan wins">
+            <AIPlanSummaryCard viewModel={planSummaryViewModel} />
+            {insightViewModel && <AIInsightCard viewModel={insightViewModel} />}
+          </CollapsibleSection>
+        </div>
+
+        <div style={{ borderTop: "1px solid #0A1020" }}>
+          <CollapsibleSection label="Planning Style">
+            <OptimisationModeSelector viewModel={optimisationModeViewModel} onChange={setOptimisationMode} />
+          </CollapsibleSection>
+        </div>
       </div>
-      <AIPlanSummaryCard viewModel={planSummaryViewModel} />
-      <OptimisationModeSelector viewModel={optimisationModeViewModel} onChange={setOptimisationMode} />
-      <PlanTimelineCard viewModel={timelineViewModel} />
-      {insightViewModel && <AIInsightCard viewModel={insightViewModel} />}
-      <AskGridlyCard />
+
     </div>
   );
 }
+

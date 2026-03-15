@@ -65,6 +65,7 @@ export type GridlyPlanSession = {
   type: GridlyPlanSessionType;
   start: string;
   end: string;
+  reasoning?: string[];
   priceRange?: string;
   priceMin: number;
   priceMax: number;

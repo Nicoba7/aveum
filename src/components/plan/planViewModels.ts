@@ -1,18 +1,28 @@
 import { PricingState } from "../../hooks/useAgileRates";
 import { PlanSlot, PlanSummary, ConnectedDeviceId, OptimisationMode, GridlyPlanSummary, GridlyPlanSession } from "../../lib/gridlyPlan";
+import { buildDecisionExplanation } from "../../lib/decisionExplanation";
 
 export type PlanHeroViewModel = {
   title: string;
+  subline: string;
   value: string;
   outcomes: string[];
   trustNote: string;
   statusNote?: string;
+  confidenceLabel: string;
+  confidencePct?: number;
+  confidenceReason?: string;
+  whatChanged?: string;
+  projectedSavings: number;
+  projectedEarnings: number;
+  cheapestPrice: number;
 };
 
 export type PlanTimelineRow = {
   time: string;
   action: string;
   reason: string;
+  reasoning: string[];
   value: string;
   color: string;
   highlight?: boolean;
@@ -75,11 +85,168 @@ function coreActionFromSessionType(sessionType: GridlyPlanSession["type"]) {
 }
 
 export function getSessionActionLabel(sessionType: GridlyPlanSession["type"]) {
-  if (sessionType === "battery_charge") return "Battery charging overnight";
-  if (sessionType === "ev_charge") return "Charging EV overnight";
-  if (sessionType === "export") return "Selling energy during peak prices";
-  if (sessionType === "solar_use") return "Solar covering home demand";
-  return "Holding steady";
+  if (sessionType === "battery_charge") return "Top up battery while rates are low";
+  if (sessionType === "ev_charge") return "Charge your EV before morning";
+  if (sessionType === "export") return "Sell surplus when prices peak";
+  if (sessionType === "solar_use") return "Let solar power the home";
+  return "Nothing to do";
+}
+
+function buildCalmHeroTitle({
+  intent,
+  sessions,
+  solarForecastKwh,
+  summary,
+}: {
+  intent: GridlyPlanSummary["intent"];
+  sessions: GridlyPlanSession[];
+  solarForecastKwh: number;
+  summary: PlanSummary;
+}): string {
+  const hasEV = sessions.some((s) => s.type === "ev_charge");
+  const hasBatteryCharge = sessions.some((s) => s.type === "battery_charge");
+  const hasExport = sessions.some((s) => s.type === "export");
+  const hasSolarSession = sessions.some((s) => s.type === "solar_use");
+  const priceSpread = summary.peakPrice - summary.cheapestPrice;
+
+  if (hasEV && hasBatteryCharge) return "Tomorrow is already prepared";
+  if (intent === "use_solar" || (hasSolarSession && solarForecastKwh >= 12)) return "Tomorrow is already optimised";
+  if (intent === "capture_cheap_energy" || (hasBatteryCharge && priceSpread >= 6)) return "Tomorrow is already optimised";
+  if (intent === "export_at_peak" || hasExport) return "Tomorrow is already optimised";
+  if (intent === "avoid_peak_import") return "Tomorrow is already prepared";
+  return "Tomorrow is already optimised";
+}
+
+function buildConfidenceViewModel({
+  pricingStatus,
+  loading,
+  summary,
+  solarForecastKwh,
+  sessions,
+}: {
+  pricingStatus: PricingState;
+  loading: boolean;
+  summary: PlanSummary;
+  solarForecastKwh: number;
+  sessions: GridlyPlanSession[];
+}) {
+  if (loading) {
+    return {
+      confidenceLabel: "Forecast still settling",
+      confidencePct: 74,
+      confidenceReason: "Updating live prices and weather data.",
+    };
+  }
+
+  if (pricingStatus === "fallback_live") {
+    return {
+      confidenceLabel: "Forecast still settling",
+      confidencePct: 79,
+      confidenceReason: "Prices may still shift.",
+    };
+  }
+
+  let confidencePct = pricingStatus === "live" ? 86 : 81;
+  const spread = summary.peakPrice - summary.cheapestPrice;
+  const hasSolarSession = sessions.some((s) => s.type === "solar_use");
+  const hasBatteryCharge = sessions.some((s) => s.type === "battery_charge");
+
+  if (spread >= 10) confidencePct += 3;
+  if (spread >= 6 && spread < 10) confidencePct += 1;
+  if (solarForecastKwh >= 14 && hasSolarSession) confidencePct += 4;
+  if (hasBatteryCharge && summary.cheapestPrice <= 12) confidencePct += 2;
+
+  confidencePct = Math.min(97, Math.max(72, confidencePct));
+
+  const confidenceLabel = confidencePct >= 90
+    ? "High confidence"
+    : confidencePct >= 83
+    ? "Good confidence"
+    : "Forecast still settling";
+
+  let confidenceReason = "Stable overnight prices.";
+  if (solarForecastKwh >= 14 && hasSolarSession) {
+    confidenceReason = "Strong solar forecast.";
+  } else if (spread < 5) {
+    confidenceReason = "Prices may still shift.";
+  } else if (pricingStatus === "sandbox") {
+    confidenceReason = "Using demo conditions.";
+  }
+
+  return {
+    confidenceLabel,
+    confidencePct,
+    confidenceReason,
+  };
+}
+
+function buildWhatChangedMessage({
+  sessions,
+  solarForecastKwh,
+  summary,
+}: {
+  sessions: GridlyPlanSession[];
+  solarForecastKwh: number;
+  summary: PlanSummary;
+}) {
+  const hasBatteryCharge = sessions.some((s) => s.type === "battery_charge");
+  const hasExport = sessions.some((s) => s.type === "export");
+  const spread = summary.peakPrice - summary.cheapestPrice;
+
+  if (solarForecastKwh >= 14 && !hasBatteryCharge) {
+    return "More solar than today, so overnight charging is lighter.";
+  }
+
+  if (hasExport && spread >= 10) {
+    return "Stronger peak prices mean Gridly plans to export later.";
+  }
+
+  if (hasBatteryCharge && summary.cheapestPrice <= 10) {
+    return "Cheaper overnight rates allow a deeper battery top-up.";
+  }
+
+  return undefined;
+}
+
+function conciseSubline(text: string): string {
+  const normalized = text.toLowerCase();
+
+  if (normalized.includes("overnight prices are low enough")) {
+    return "Overnight prices are low, so Gridly charges before tomorrow’s expensive periods.";
+  }
+
+  if (normalized.includes("spacing charging through sensible overnight windows")) {
+    return "Gridly spaces overnight charging so your EV is ready without unnecessary battery wear.";
+  }
+
+  if (normalized.includes("strong solar is expected tomorrow")) {
+    return "Strong solar is expected tomorrow, so Gridly avoids unnecessary overnight charging.";
+  }
+
+  if (normalized.includes("capturing cheaper energy now")) {
+    return "Gridly captures cheaper energy now for tomorrow’s highest-value periods.";
+  }
+
+  if (normalized.includes("battery reserve is already healthy")) {
+    return "Battery reserve is already healthy, so extra overnight charging adds little value.";
+  }
+
+  if (normalized.includes("cleaner daytime and solar energy")) {
+    return "Gridly is waiting for cleaner daytime and solar energy instead of charging overnight.";
+  }
+
+  if (normalized.includes("do not create a strong enough saving opportunity")) {
+    return "Overnight prices are not strong enough to justify charging tonight.";
+  }
+
+  if (text.length <= 92) return text;
+
+  const firstSentence = text.split(".").map((part) => part.trim()).filter(Boolean)[0];
+  if (firstSentence && firstSentence.length <= 92) {
+    return `${firstSentence}.`;
+  }
+
+  return text.slice(0, 92).trim();
 }
 
 function compactReason(
@@ -157,11 +324,13 @@ function mergeSessionGroup(sessions: GridlyPlanSession[]): GridlyPlanSession {
   const maxEnd = Math.max(...sorted.map((session) => toSlotIndex(session.end)));
   const priceMin = Math.min(...sorted.map((session) => session.priceMin));
   const priceMax = Math.max(...sorted.map((session) => session.priceMax));
+  const reasoning = [...new Set(sorted.flatMap((session) => session.reasoning ?? []))];
 
   return {
     type: first.type,
     start: toHHMM(minStart),
     end: toHHMM(maxEnd),
+    reasoning,
     priceRange: formatPriceRange(priceMin, priceMax),
     priceMin,
     priceMax,
@@ -227,44 +396,79 @@ export function buildPlanHeroViewModel({
   sessions,
   pricingStatus,
   loading,
+  solarForecastKwh,
 }: {
   summary: PlanSummary;
   gridlySummary: GridlyPlanSummary;
   sessions: GridlyPlanSession[];
   pricingStatus: PricingState;
   loading: boolean;
+  solarForecastKwh: number;
 }): PlanHeroViewModel {
   const value = summary.projectedEarnings + summary.projectedSavings;
 
   const trustNote = loading
-    ? "Updating with the latest prices."
+    ? "Refreshing the latest prices and forecasts."
     : pricingStatus === "live"
-    ? "Using live prices — this plan updates automatically."
+    ? "Using live prices. Gridly will adapt automatically if conditions shift."
     : pricingStatus === "fallback_live"
-    ? "Using estimated prices for now — live prices will update automatically."
-    : "Using demo prices for preview mode.";
+    ? "Live prices are briefly delayed. Gridly is running a safe plan and will refresh automatically."
+    : "Preview mode: showing a representative strategy.";
 
   const statusNote = loading
-    ? "Loading prices..."
+    ? "Status: Refreshing"
     : pricingStatus === "live"
-    ? "Live pricing"
+    ? "Status: Live"
     : pricingStatus === "fallback_live"
-    ? "Estimated pricing"
-    : "Demo pricing";
+    ? "Status: Estimated"
+    : "Status: Preview";
+
+  const confidence = buildConfidenceViewModel({
+    pricingStatus,
+    loading,
+    summary,
+    solarForecastKwh,
+    sessions,
+  });
 
   return {
-    title: gridlySummary.planHeadline,
+    title: buildCalmHeroTitle({
+      intent: gridlySummary.intent,
+      sessions,
+      solarForecastKwh,
+      summary,
+    }),
+    subline: conciseSubline(gridlySummary.customerReason),
     value: `+${formatMoney(value)}`,
     outcomes: sessions.map(formatSessionOutcome),
     trustNote,
     statusNote,
+    confidenceLabel: confidence.confidenceLabel,
+    confidencePct: confidence.confidencePct,
+    confidenceReason: confidence.confidenceReason,
+    whatChanged: buildWhatChangedMessage({
+      sessions,
+      solarForecastKwh,
+      summary,
+    }),
+    projectedSavings: summary.projectedSavings,
+    projectedEarnings: summary.projectedEarnings,
+    cheapestPrice: summary.cheapestPrice,
   };
 }
 
 export function buildPlanTimelineViewModel(
   sessions: GridlyPlanSession[],
   connectedDeviceIds: ConnectedDeviceId[],
-  mode: OptimisationMode
+  mode: OptimisationMode,
+  options?: {
+    solarForecastKwh?: number;
+    cheapestPrice?: number;
+    peakPrice?: number;
+    cheapestWindow?: string;
+    peakWindow?: string;
+    evReadyBy?: string;
+  }
 ): PlanTimelineViewModel {
   const hasBattery = connectedDeviceIds.includes("battery");
   const hasSolar = connectedDeviceIds.includes("solar");
@@ -282,6 +486,24 @@ export function buildPlanTimelineViewModel(
           hasSolar,
           hasBatteryCharge,
         }),
+        reasoning: session.reasoning?.length
+          ? session.reasoning.slice(0, 4)
+          : buildDecisionExplanation(
+              session,
+              {
+                solarForecastKwh: options?.solarForecastKwh,
+                evReadyBy: options?.evReadyBy,
+              },
+              {
+                cheapestPrice: options?.cheapestPrice,
+                peakPrice: options?.peakPrice,
+                cheapestWindow: options?.cheapestWindow,
+                peakWindow: options?.peakWindow,
+                gridCondition: hasSolar
+                  ? "Grid conditions are steady, with solar expected to support demand."
+                  : "Grid conditions are steady in this planning window.",
+              }
+            ),
         value: session.priceRange ?? (session.priceMin === session.priceMax ? `${session.priceMin.toFixed(1)}p` : `${session.priceMin.toFixed(1)}–${session.priceMax.toFixed(1)}p`),
         color: session.color,
         highlight: session.highlight,
@@ -338,7 +560,7 @@ export function buildPlanSummaryViewModel({
   const highlights = sessions.map(formatSessionOutcome);
 
   return {
-    title: "Why this plan works",
+    title: "Why this plan wins",
     summary: gridlySummary.customerReason,
     modeTag: summary.mode,
     highlights,
@@ -358,44 +580,44 @@ export function buildAIInsightViewModel({
 }): AIInsightViewModel | null {
   if (pricingStatus === "fallback_live") {
     return {
-      insight: "Live prices are briefly unavailable, so Gridly is using a conservative estimate and will refresh automatically.",
+      insight: "Live prices are briefly delayed. Gridly is running a safe plan and will refresh automatically.",
     };
   }
 
   if (pricingStatus === "sandbox") {
     return {
-      insight: "You’re viewing a demo plan. Connect live pricing to unlock real-time optimisation.",
+      insight: "This is a preview plan. Connect live pricing to enable real-time optimisation.",
     };
   }
   if (!gridlySummary.showInsightCard) return null;
 
   if (gridlySummary.intent === "use_solar" && mode === "GREENEST") {
     return {
-      insight: "Balanced may look similar tonight, but Greenest is intentionally waiting for cleaner daytime and solar energy.",
+      insight: "Greenest waits for cleaner daytime energy, even when Balanced looks similar overnight.",
     };
   }
 
   if (gridlySummary.intent === "avoid_peak_import" && mode === "BALANCED") {
     return {
-      insight: "Balanced is holding steady because your reserve is already healthy and extra cycling adds little value tonight.",
+      insight: "Balanced holds steady because reserve is healthy and extra cycling adds little value tonight.",
     };
   }
 
   if (gridlySummary.intent === "capture_cheap_energy" && mode === "CHEAPEST") {
     return {
-      insight: "Cheapest is leaning into low overnight prices to capture more value by tomorrow.",
+      insight: "Cheapest leans into low overnight prices to capture more value by tomorrow.",
     };
   }
 
   if (gridlySummary.intent === "protect_deadline") {
     return {
-      insight: "Your EV deadline is the priority, so Gridly is shaping the rest of the plan around being ready on time.",
+      insight: "Your EV deadline is the priority, so the rest of the plan is shaped around being ready on time.",
     };
   }
 
   if (gridlySummary.intent === "export_at_peak") {
     return {
-      insight: "Gridly is saving flexibility for the most valuable part of tomorrow rather than acting early.",
+      insight: "Gridly keeps flexibility for tomorrow’s highest-value export window rather than acting early.",
     };
   }
 
@@ -407,19 +629,19 @@ export function buildOptimisationModeViewModel(mode: OptimisationMode): Optimisa
     mode,
     options: [
       {
-        id: "CHEAPEST",
+        id: "CHEAPEST" as const,
         label: "Cheapest",
-        description: "Prioritise minimum import price and strong arbitrage windows.",
+        description: "Lower bills, more charge cycles.",
       },
       {
-        id: "BALANCED",
+        id: "BALANCED" as const,
         label: "Balanced",
-        description: "Balance cost, battery wear, and clean energy periods.",
+        description: "Savings with battery protection.",
       },
       {
-        id: "GREENEST",
+        id: "GREENEST" as const,
         label: "Greenest",
-        description: "Prioritise solar and lower-carbon windows over raw price.",
+        description: "Cleaner energy, less grid import.",
       },
     ],
   };

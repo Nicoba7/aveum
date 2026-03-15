@@ -2,7 +2,6 @@ import HistoryTab from "../components/HistoryTab";
 import HomeTab from "../components/HomeTab";
 import PlanTab from "../components/PlanTab";
 import { buildGridlyPlan } from "../lib/gridlyPlan";
-import { importTariffsFromApi, type TariffRecord } from "../lib/tariffApi";
 import { useState, useEffect, useMemo } from "react";
 import { Sun, Battery, Zap, Grid3X3, Home, Calendar, Clock, ChevronDown, ChevronUp } from "lucide-react";
 import { AGILE_RATES, type AgileRate } from "../data/agileRates";
@@ -33,6 +32,13 @@ export const SANDBOX = {
     { id: "cosy",    name: "Cosy Octopus",            annualSaving: 634,  current: false, badge: null },
   ],
   history: [
+    { day: "Mon", solar: 0.96, battery: 0.81, ev: 0.52, grid: 0.14 },
+    { day: "Tue", solar: 1.38, battery: 1.05, ev: 0.74, grid: 0.20 },
+    { day: "Wed", solar: 0.72, battery: 0.69, ev: 0.31, grid: 0.10 },
+    { day: "Thu", solar: 1.94, battery: 1.41, ev: 1.12, grid: 0.28 },
+    { day: "Fri", solar: 1.08, battery: 0.92, ev: 0.66, grid: 0.16 },
+    { day: "Sat", solar: 2.46, battery: 1.78, ev: 1.54, grid: 0.39 },
+    { day: "Sun", solar: 1.63, battery: 1.18, ev: 0.91, grid: 0.24 },
     { day: "Mon", solar: 1.24, battery: 0.98, ev: 0.63, grid: 0.18 },
     { day: "Tue", solar: 2.11, battery: 1.42, ev: 1.21, grid: 0.31 },
     { day: "Wed", solar: 0.94, battery: 0.87, ev: 0.44, grid: 0.12 },
@@ -186,7 +192,6 @@ export function ManualOverride({ currentPence, connectedDevices }: { currentPenc
   const [expanded, setExpanded] = useState(false);
   const hasBattery = connectedDevices.some(d => d.id === "battery");
   const hasEV = connectedDevices.some(d => d.id === "ev");
-  const isExpensive = currentPence > 20;
 
   const handleOverride = (action: string) => {
     setOverride(override === action ? null : action);
@@ -198,51 +203,49 @@ export function ManualOverride({ currentPence, connectedDevices }: { currentPenc
   return (
     <div style={{ margin: "0 20px 16px" }}>
       {override ? (
-        <div style={{ background: "#1A1A2E", border: "1px solid #38BDF840", borderRadius: 16, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ background: "#0F1724", border: "1px solid #1F3045", borderRadius: 16, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div>
-            <div style={{ fontSize: 11, color: "#38BDF8", fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>MANUAL OVERRIDE ACTIVE</div>
+            <div style={{ fontSize: 10, color: "#70829B", fontWeight: 700, letterSpacing: 0.8, marginBottom: 4 }}>MANUAL CONTROL</div>
             <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>
-              {override === "charge_now" ? "⚡ Charging battery" : override === "charge_ev" ? "🚗 Charging EV" : "⏸ Paused"}
+              {override === "charge_now" ? "⚡ Battery charging" : override === "charge_ev" ? "🚗 EV charging" : "⏸ Gridly paused"}
             </div>
-            <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>
-              {isExpensive ? `Currently ${currentPence}p — not cheapest but charging as requested` : `Currently ${currentPence}p — good time to charge`}
-            </div>
+            <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>Running at {currentPence}p.</div>
           </div>
-          <button onClick={() => setOverride(null)} style={{ background: "#374151", border: "none", borderRadius: 8, padding: "6px 12px", color: "#9CA3AF", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0, marginLeft: 12 }}>
-            Cancel
+          <button onClick={() => setOverride(null)} style={{ background: "#182235", border: "1px solid #243247", borderRadius: 999, padding: "6px 12px", color: "#AAB6C5", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>
+            Stop
           </button>
         </div>
       ) : !expanded ? (
-        <button onClick={() => setExpanded(true)} style={{ width: "100%", background: "none", border: "1px dashed #374151", borderRadius: 12, padding: "10px 16px", color: "#6B7280", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span>Manual override</span>
-          <span style={{ fontSize: 11, color: "#4B5563" }}>Now: {currentPence}p/kWh</span>
+        <button onClick={() => setExpanded(true)} style={{ width: "100%", background: "#09101A", border: "1px solid #172236", borderRadius: 12, padding: "10px 14px", color: "#7C8BA0", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Manual control</span>
+          <span style={{ fontSize: 11, color: "#526177" }}>{currentPence}p now</span>
         </button>
       ) : (
-        <div style={{ background: "#111827", border: "1px solid #374151", borderRadius: 16, padding: "14px 16px" }}>
+        <div style={{ background: "#0B1120", border: "1px solid #182235", borderRadius: 16, padding: "14px 16px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <div style={{ fontSize: 11, color: "#6B7280", fontWeight: 700, letterSpacing: 1 }}>OVERRIDE GRIDLY</div>
-            <div style={{ fontSize: 12, color: isExpensive ? "#EF4444" : "#22C55E", fontWeight: 700 }}>{currentPence}p/kWh now</div>
+            <div style={{ fontSize: 11, color: "#70829B", fontWeight: 700, letterSpacing: 0.8 }}>TEMPORARY OVERRIDE</div>
+            <div style={{ fontSize: 12, color: "#7C8BA0", fontWeight: 700 }}>{currentPence}p now</div>
           </div>
           <div style={{ display: "grid", gap: 8 }}>
             {hasBattery && (
-              <button onClick={() => handleOverride("charge_now")} style={{ background: "#16A34A15", border: "1px solid #16A34A30", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#22C55E", marginBottom: 2 }}>⚡ Charge battery now</div>
-                <div style={{ fontSize: 11, color: "#6B7280" }}>Force charge regardless of price</div>
+              <button onClick={() => handleOverride("charge_now")} style={{ background: "#0D1717", border: "1px solid #1A2B2B", borderRadius: 10, padding: "11px 13px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#B9D7C0", marginBottom: 2 }}>⚡ Charge battery</div>
+                <div style={{ fontSize: 11, color: "#6B7280" }}>Start now.</div>
               </button>
             )}
             {hasEV && (
-              <button onClick={() => handleOverride("charge_ev")} style={{ background: "#38BDF815", border: "1px solid #38BDF830", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#38BDF8", marginBottom: 2 }}>🚗 Charge EV now</div>
-                <div style={{ fontSize: 11, color: "#6B7280" }}>Start charging at {currentPence}p/kWh</div>
+              <button onClick={() => handleOverride("charge_ev")} style={{ background: "#0C1520", border: "1px solid #1B2B3E", borderRadius: 10, padding: "11px 13px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#B5CBDC", marginBottom: 2 }}>🚗 Charge EV</div>
+                <div style={{ fontSize: 11, color: "#6B7280" }}>Start now.</div>
               </button>
             )}
-            <button onClick={() => handleOverride("pause")} style={{ background: "#37415115", border: "1px solid #37415130", borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#9CA3AF", marginBottom: 2 }}>⏸ Pause Gridly</div>
-              <div style={{ fontSize: 11, color: "#6B7280" }}>Stop all automated actions temporarily</div>
+            <button onClick={() => handleOverride("pause")} style={{ background: "#111827", border: "1px solid #1F2937", borderRadius: 10, padding: "11px 13px", cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#B7BDC7", marginBottom: 2 }}>⏸ Pause Gridly</div>
+              <div style={{ fontSize: 11, color: "#6B7280" }}>Stop schedules.</div>
             </button>
           </div>
-          <button onClick={() => setExpanded(false)} style={{ marginTop: 10, background: "none", border: "none", color: "#4B5563", fontSize: 11, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
-            Cancel
+          <button onClick={() => setExpanded(false)} style={{ marginTop: 10, background: "none", border: "none", color: "#5A6880", fontSize: 11, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
+            Close
           </button>
         </div>
       )}
@@ -257,34 +260,25 @@ export function EVReadyBy() {
   const [chargingPowerKw, setChargingPowerKw] = useState(7.4);
   const [maxBudget, setMaxBudget] = useState(5);
   const [expanded, setExpanded] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const plan = calcEVPlan(targetPct, readyByHour);
   const hours = [1,2,3,4,5,6,7,8,9,10,11,12];
   const overBudget = plan.cost > maxBudget;
   const adjustedPlanCost = Number((plan.cost * (7.4 / chargingPowerKw)).toFixed(2));
 
   return (
-    <div style={{ margin: "0 20px 16px", background: "#0D1521", border: "1px solid #38BDF820", borderRadius: 16, overflow: "hidden" }}>
+    <div style={{ margin: "0 20px 16px", background: "#0D141E", border: "1px solid #223247", borderRadius: 16, overflow: "hidden" }}>
       <button onClick={() => setExpanded(e => !e)} style={{ width: "100%", background: "none", border: "none", padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ textAlign: "left" }}>
-          <div style={{ fontSize: 11, color: "#38BDF8", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>EV READY-BY</div>
+          <div style={{ fontSize: 10, color: "#7FA3C8", fontWeight: 700, letterSpacing: 0.8, marginBottom: 3 }}>EV READY</div>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>
-            🚗 {targetPct}% by {readyByHour}:00am · <span style={{ color: overBudget ? "#F59E0B" : "#22C55E" }}>£{adjustedPlanCost.toFixed(2)}</span>
+            🚗 {targetPct}% by {readyByHour}:00 · <span style={{ color: overBudget ? "#F59E0B" : "#22C55E" }}>£{adjustedPlanCost.toFixed(2)}</span>
           </div>
         </div>
         {expanded ? <ChevronUp size={16} color="#6B7280" /> : <ChevronDown size={16} color="#6B7280" />}
       </button>
       {expanded && (
         <div style={{ padding: "0 16px 16px", borderTop: "1px solid #1F2937" }}>
-          <div style={{ paddingTop: 14, marginBottom: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-              <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700 }}>CHARGE TO</span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: "#38BDF8" }}>{targetPct}%</span>
-            </div>
-            <input type="range" min={20} max={100} step={10} value={targetPct} onChange={e => setTargetPct(Number(e.target.value))} style={{ width: "100%", accentColor: "#38BDF8", cursor: "pointer" }} />
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#374151", marginTop: 2 }}>
-              <span>20%</span><span>50%</span><span>80%</span><span>100%</span>
-            </div>
-          </div>
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700, marginBottom: 8 }}>READY BY</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -295,31 +289,49 @@ export function EVReadyBy() {
               ))}
             </div>
           </div>
-          <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-              <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700 }}>CHARGER POWER</span>
-              <span style={{ fontSize: 12, color: "#38BDF8", fontWeight: 700 }}>{chargingPowerKw.toFixed(1)} kW</span>
+              <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700 }}>CHARGE TO</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#38BDF8" }}>{targetPct}%</span>
             </div>
-            <input type="range" min={3.6} max={11} step={0.2} value={chargingPowerKw} onChange={e => setChargingPowerKw(Number(e.target.value))} style={{ width: "100%", accentColor: "#38BDF8", cursor: "pointer" }} />
+            <input type="range" min={20} max={100} step={10} value={targetPct} onChange={e => setTargetPct(Number(e.target.value))} style={{ width: "100%", accentColor: "#38BDF8", cursor: "pointer" }} />
           </div>
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-              <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700 }}>MAX COST TONIGHT</span>
-              <span style={{ fontSize: 12, color: overBudget ? "#F59E0B" : "#22C55E", fontWeight: 700 }}>£{maxBudget.toFixed(2)}</span>
+          <div style={{ background: "#111827", borderRadius: 10, padding: "10px 14px", marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 4 }}>Gridly plan</div>
+            <div style={{ fontSize: 13, color: "#F9FAFB", lineHeight: 1.5 }}>
+              Finish by <span style={{ color: "#38BDF8", fontWeight: 700 }}>{plan.finishTime}</span>. {plan.slots.length} low-cost slots.
             </div>
-            <input type="range" min={1} max={10} step={0.5} value={maxBudget} onChange={e => setMaxBudget(Number(e.target.value))} style={{ width: "100%", accentColor: overBudget ? "#F59E0B" : "#22C55E", cursor: "pointer" }} />
-            {overBudget && (
-              <div style={{ marginTop: 6, fontSize: 11, color: "#F59E0B" }}>
-                Current settings estimate £{adjustedPlanCost.toFixed(2)}. Try lowering target, increasing ready-by time, or increasing max budget.
+          </div>
+          <button
+            onClick={() => setShowAdvanced((value) => !value)}
+            style={{ width: "100%", background: "none", border: "1px solid #1F2937", borderRadius: 8, padding: "8px 10px", color: "#6B7280", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", marginBottom: 10 }}
+          >
+            {showAdvanced ? "Hide advanced" : "Advanced"}
+          </button>
+
+          {showAdvanced && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700 }}>POWER</span>
+                  <span style={{ fontSize: 12, color: "#38BDF8", fontWeight: 700 }}>{chargingPowerKw.toFixed(1)} kW</span>
+                </div>
+                <input type="range" min={3.6} max={11} step={0.2} value={chargingPowerKw} onChange={e => setChargingPowerKw(Number(e.target.value))} style={{ width: "100%", accentColor: "#38BDF8", cursor: "pointer" }} />
               </div>
-            )}
-          </div>
-          <div style={{ background: "#111827", borderRadius: 10, padding: "10px 14px" }}>
-            <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 4 }}>Gridly's plan</div>
-            <div style={{ fontSize: 13, color: "#F9FAFB", lineHeight: 1.6 }}>
-              Charge during the <span style={{ color: "#22C55E", fontWeight: 700 }}>{plan.slots.length} cheapest slots</span> overnight. Done by <span style={{ color: "#38BDF8", fontWeight: 700 }}>{plan.finishTime}</span>. Estimated: <span style={{ color: overBudget ? "#F59E0B" : "#22C55E", fontWeight: 700 }}>£{adjustedPlanCost.toFixed(2)}</span>.
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700 }}>MAX COST</span>
+                  <span style={{ fontSize: 12, color: overBudget ? "#F59E0B" : "#22C55E", fontWeight: 700 }}>£{maxBudget.toFixed(2)}</span>
+                </div>
+                <input type="range" min={1} max={10} step={0.5} value={maxBudget} onChange={e => setMaxBudget(Number(e.target.value))} style={{ width: "100%", accentColor: overBudget ? "#F59E0B" : "#22C55E", cursor: "pointer" }} />
+              </div>
             </div>
-          </div>
+          )}
+          {overBudget && (
+            <div style={{ fontSize: 11, color: "#F59E0B" }}>
+              Above budget. Try a later ready time.
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -332,20 +344,20 @@ export function BatteryReserve() {
   const [expanded, setExpanded] = useState(false);
 
   const label = reserve <= 10
-    ? "Maximise earnings — Gridly uses almost everything"
+    ? "Lower reserve. More savings."
     : reserve <= 20
-    ? "Balanced — enough left for a short power cut"
+    ? "Balanced daily setting."
     : reserve <= 40
-    ? "Safety buffer — covers most outages"
-    : "Conservative — prioritising backup over savings";
+    ? "More backup for outages."
+    : "Maximum backup.";
 
   return (
     <div style={{ margin: "0 20px 16px", background: "#0D1F14", border: "1px solid #16A34A20", borderRadius: 16, overflow: "hidden" }}>
       <button onClick={() => setExpanded(e => !e)} style={{ width: "100%", background: "none", border: "none", padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ textAlign: "left" }}>
-          <div style={{ fontSize: 11, color: "#22C55E", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>BATTERY RESERVE</div>
+          <div style={{ fontSize: 11, color: "#22C55E", fontWeight: 700, letterSpacing: 0.8, marginBottom: 3 }}>BATTERY RESERVE</div>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>
-            🔋 Always keep <span style={{ color: "#22C55E" }}>{reserve}%</span> — never touch it
+            🔋 Keep <span style={{ color: "#22C55E" }}>{reserve}%</span> in reserve
           </div>
         </div>
         {expanded ? <ChevronUp size={16} color="#6B7280" /> : <ChevronDown size={16} color="#6B7280" />}
@@ -372,27 +384,32 @@ export function BatteryReserve() {
 // ── SOLAR FORECAST CARD ───────────────────────────────────────────────────
 export function SolarForecastCard() {
   const f = SANDBOX.solarForecast;
-  const advice = f.kwh > 15
-    ? "Good solar tomorrow — Gridly will export more today and charge less overnight. Free energy incoming."
+  const summary = f.kwh > 15
+    ? "Strong solar tomorrow."
     : f.kwh > 8
-    ? "Moderate solar tomorrow — Gridly will partially charge overnight and top up from your panels."
-    : "Low solar tomorrow — Gridly will fully charge your battery overnight at the cheapest rate.";
+    ? "Moderate solar tomorrow."
+    : "Low solar tomorrow.";
+  const nextMove = f.kwh > 15
+    ? "Gridly will charge less overnight."
+    : f.kwh > 8
+    ? "Gridly will split overnight charging."
+    : "Gridly will charge overnight.";
 
   return (
-    <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #F59E0B20", borderRadius: 16, padding: "14px 16px" }}>
-      <div style={{ fontSize: 11, color: "#F59E0B", fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>TOMORROW'S SOLAR</div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+    <div style={{ margin: "0 20px 16px", background: "#0E1622", border: "1px solid #1E2A3D", borderRadius: 16, padding: "13px 16px" }}>
+      <div style={{ fontSize: 10, color: "#8B9BB2", fontWeight: 700, letterSpacing: 0.8, marginBottom: 8 }}>TOMORROW</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div>
-          <div style={{ fontSize: 22, fontWeight: 900, color: "#F9FAFB", letterSpacing: -0.5 }}>{f.icon} {f.kwh} kWh</div>
-          <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>{f.condition} · {f.confidence}% confidence</div>
+          <div style={{ fontSize: 21, fontWeight: 900, color: "#F9FAFB", letterSpacing: -0.4 }}>{f.icon} {f.kwh} kWh</div>
+          <div style={{ fontSize: 11, color: "#7B8798", marginTop: 2 }}>{f.condition}</div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 10, color: "#4B5563", marginBottom: 4 }}>vs today</div>
+          <div style={{ fontSize: 10, color: "#5F6E83", marginBottom: 4 }}>vs today</div>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#22C55E" }}>+{f.deltaKwh} kWh ↑</div>
         </div>
       </div>
-      <div style={{ background: "#111827", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#9CA3AF", lineHeight: 1.5 }}>
-        {advice}
+      <div style={{ fontSize: 12, color: "#A9B4C4", lineHeight: 1.45 }}>
+        {summary} {nextMove}
       </div>
     </div>
   );
@@ -425,14 +442,15 @@ export function CrossDeviceCoordination({ connectedDevices, currentPence }: { co
 export function BatteryHealthScore() {
   const h = SANDBOX.batteryHealth;
   const [expanded, setExpanded] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const cyclePct = Math.round((h.cyclesUsed / h.cyclesTotal) * 100);
   const healthColor = h.capacityPct >= 90 ? "#22C55E" : h.capacityPct >= 75 ? "#F59E0B" : "#EF4444";
   const healthLabel = h.capacityPct >= 90 ? "Excellent" : h.capacityPct >= 75 ? "Good" : "Degraded";
   return (
-    <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, overflow: "hidden" }}>
+    <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1C2635", borderRadius: 16, overflow: "hidden" }}>
       <button onClick={() => setExpanded(e => !e)} style={{ width: "100%", background: "none", border: "none", padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ textAlign: "left" }}>
-          <div style={{ fontSize: 11, color: "#6B7280", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>BATTERY HEALTH</div>
+          <div style={{ fontSize: 10, color: "#7F8DA3", fontWeight: 700, letterSpacing: 0.8, marginBottom: 3 }}>BATTERY HEALTH</div>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>
             🔋 <span style={{ color: healthColor }}>{healthLabel}</span> · {h.capacityPct}% capacity · {h.projectedLifeYears} yrs left
           </div>
@@ -441,9 +459,21 @@ export function BatteryHealthScore() {
       </button>
       {expanded && (
         <div style={{ padding: "0 16px 16px", borderTop: "1px solid #1F2937" }}>
-          <div style={{ paddingTop: 14, marginBottom: 14 }}>
+          <div style={{ paddingTop: 14, marginBottom: 10, fontSize: 12, color: "#AEB7C4", lineHeight: 1.45 }}>
+            Battery health is strong. Gridly is protecting long-term performance.
+          </div>
+          <button
+            onClick={() => setShowDetails((value) => !value)}
+            style={{ width: "100%", background: "none", border: "1px solid #1F2937", borderRadius: 8, padding: "8px 10px", color: "#6B7280", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
+          >
+            {showDetails ? "Hide details" : "View details"}
+          </button>
+
+          {showDetails && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ paddingTop: 2, marginBottom: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-              <span style={{ fontSize: 11, color: "#9CA3AF" }}>Remaining capacity</span>
+              <span style={{ fontSize: 11, color: "#9CA3AF" }}>Capacity</span>
               <span style={{ fontSize: 12, fontWeight: 800, color: healthColor }}>{h.capacityPct}%</span>
             </div>
             <div style={{ height: 6, background: "#1F2937", borderRadius: 99 }}>
@@ -452,13 +482,13 @@ export function BatteryHealthScore() {
           </div>
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-              <span style={{ fontSize: 11, color: "#9CA3AF" }}>Charge cycles used</span>
+              <span style={{ fontSize: 11, color: "#9CA3AF" }}>Cycles used</span>
               <span style={{ fontSize: 12, fontWeight: 800, color: "#F9FAFB" }}>{h.cyclesUsed} / {h.cyclesTotal.toLocaleString()}</span>
             </div>
             <div style={{ height: 6, background: "#1F2937", borderRadius: 99 }}>
               <div style={{ height: "100%", width: `${cyclePct}%`, background: "#6B7280", borderRadius: 99 }} />
             </div>
-            <div style={{ fontSize: 10, color: "#4B5563", marginTop: 4 }}>{cyclePct}% of rated cycle life used</div>
+            <div style={{ fontSize: 10, color: "#4B5563", marginTop: 4 }}>{cyclePct}% used</div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <div style={{ background: "#111827", borderRadius: 10, padding: "10px 12px" }}>
@@ -466,13 +496,15 @@ export function BatteryHealthScore() {
               <div style={{ fontSize: 16, fontWeight: 800, color: "#F9FAFB" }}>{h.weeklyChargeCycles}</div>
             </div>
             <div style={{ background: "#111827", borderRadius: 10, padding: "10px 12px" }}>
-              <div style={{ fontSize: 10, color: "#4B5563", marginBottom: 3 }}>Est. life remaining</div>
+              <div style={{ fontSize: 10, color: "#4B5563", marginBottom: 3 }}>Life left</div>
               <div style={{ fontSize: 16, fontWeight: 800, color: healthColor }}>{h.projectedLifeYears} yrs</div>
             </div>
           </div>
-          <div style={{ marginTop: 10, background: "#0D1F14", borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#6B7280", lineHeight: 1.5 }}>
-            💡 Gridly avoids unnecessary cycles — only charging when prices make it worthwhile. This extends your battery life.
+          <div style={{ marginTop: 10, background: "#0D1F14", borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#6B7280", lineHeight: 1.45 }}>
+            Gridly protects battery life by avoiding unnecessary cycling.
           </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -482,13 +514,10 @@ export function BatteryHealthScore() {
 // ── TARIFF SWITCHER ───────────────────────────────────────────────────────
 export function TariffSwitcher({ connectedDevices }: { connectedDevices: DeviceConfig[] }) {
   const [expanded, setExpanded] = useState(false);
-  const [liveTariffs, setLiveTariffs] = useState<TariffRecord[] | null>(null);
-  const [loadingTariffs, setLoadingTariffs] = useState(false);
-  const [tariffError, setTariffError] = useState<string | null>(null);
   const hasEV = connectedDevices.some(d => d.id === "ev");
   const hasBattery = connectedDevices.some(d => d.id === "battery");
 
-  const tariffs = (liveTariffs ?? SANDBOX.tariffs) as TariffRecord[];
+  const tariffs = SANDBOX.tariffs;
   const current = tariffs.find(t => t.current) ?? tariffs[0];
   const relevant = tariffs.filter(t => {
     if (t.id === "go" && !hasEV) return false;
@@ -503,28 +532,15 @@ export function TariffSwitcher({ connectedDevices }: { connectedDevices: DeviceC
   const best = relevant.reduce((a, b) => (b.annualSaving > a.annualSaving ? b : a), relevant[0]);
   const uplift = current ? best.annualSaving - current.annualSaving : 0;
 
-  const refreshTariffs = async () => {
-    setLoadingTariffs(true);
-    setTariffError(null);
-    try {
-      const imported = await importTariffsFromApi();
-      setLiveTariffs(imported);
-    } catch (err) {
-      setTariffError(err instanceof Error ? err.message : "Could not import tariff data");
-    } finally {
-      setLoadingTariffs(false);
-    }
-  };
-
   return (
-    <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #A78BFA20", borderRadius: 16, overflow: "hidden" }}>
+    <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1C2635", borderRadius: 16, overflow: "hidden" }}>
       <button onClick={() => setExpanded(e => !e)} style={{ width: "100%", background: "none", border: "none", padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ textAlign: "left" }}>
-          <div style={{ fontSize: 11, color: "#A78BFA", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>TARIFF OPTIMISER</div>
+          <div style={{ fontSize: 10, color: "#8F82C8", fontWeight: 700, letterSpacing: 0.8, marginBottom: 3 }}>TARIFF</div>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>
             {uplift > 0
-              ? <span>💡 Switch to <span style={{ color: "#A78BFA" }}>{best.name}</span> · save <span style={{ color: "#22C55E" }}>+£{uplift}/yr more</span></span>
-              : <span>✓ You are on the best tariff for your setup</span>
+              ? <span>Save about <span style={{ color: "#22C55E" }}>+£{uplift}/yr</span></span>
+              : <span>Current tariff is optimal</span>
             }
           </div>
         </div>
@@ -532,48 +548,22 @@ export function TariffSwitcher({ connectedDevices }: { connectedDevices: DeviceC
       </button>
       {expanded && (
         <div style={{ padding: "0 16px 16px", borderTop: "1px solid #1F2937" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, paddingTop: 14 }}>
-            <div style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.5 }}>
-              Based on your devices and usage, here is what each tariff would earn you per year with Gridly.
-            </div>
-            <button
-              onClick={refreshTariffs}
-              disabled={loadingTariffs}
-              style={{ background: "#1F2937", border: "1px solid #374151", borderRadius: 8, padding: "6px 10px", color: "#D1D5DB", fontSize: 11, fontWeight: 700, cursor: loadingTariffs ? "default" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
-            >
-              {loadingTariffs ? "Importing…" : "Import live tariffs"}
-            </button>
+          <div style={{ paddingTop: 14, fontSize: 12, color: "#AEB7C4", lineHeight: 1.45 }}>
+            {uplift > 0
+              ? `${best.name} looks better for your home. Gridly estimates +£${uplift} each year.`
+              : `${current.name} already fits your home well.`}
           </div>
-          {tariffError && (
-            <div style={{ marginTop: 8, fontSize: 11, color: "#FCA5A5", background: "#2a1111", border: "1px solid #EF444430", borderRadius: 8, padding: "8px 10px" }}>
-              {tariffError}
+          <div style={{ marginTop: 12, background: "#111827", borderRadius: 10, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#6B7280", marginBottom: 2 }}>Annual estimate</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: uplift > 0 ? "#22C55E" : "#F9FAFB" }}>
+                £{best.annualSaving}/yr
+              </div>
             </div>
-          )}
-          <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-            {relevant.map(t => {
-              const diff = current ? t.annualSaving - current.annualSaving : 0;
-              const isBest = t.id === best.id;
-              return (
-                <div key={t.id} style={{ background: t.current ? "#0D1F14" : isBest ? "#1A0F2E" : "#111827", border: `1px solid ${t.current ? "#16A34A30" : isBest ? "#A78BFA30" : "#1F2937"}`, borderRadius: 10, padding: "10px 14px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#F9FAFB", marginBottom: 2 }}>{t.name}</div>
-                      {t.badge && <div style={{ fontSize: 10, color: t.current ? "#22C55E" : isBest ? "#A78BFA" : "#6B7280", fontWeight: 700 }}>{t.badge}</div>}
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: t.current ? "#22C55E" : "#F9FAFB" }}>£{t.annualSaving}/yr</div>
-                      {!t.current && <div style={{ fontSize: 11, fontWeight: 700, color: diff > 0 ? "#22C55E" : "#EF4444" }}>{diff > 0 ? `+£${diff} more` : `£${Math.abs(diff)} less`}</div>}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {uplift > 0 && (
-            <a href="https://octopus.energy/tariffs/" target="_blank" rel="noreferrer" style={{ display: "block", marginTop: 12, background: "#A78BFA", borderRadius: 10, padding: "11px 14px", textAlign: "center", fontSize: 13, fontWeight: 700, color: "#0D1117", textDecoration: "none" }}>
-              Switch on Octopus →
+            <a href="https://octopus.energy/tariffs/" target="_blank" rel="noreferrer" style={{ background: "#1F2937", border: "1px solid #374151", borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 700, color: "#D1D5DB", textDecoration: "none" }}>
+              Review tariff
             </a>
-          )}
+          </div>
         </div>
       )}
     </div>
@@ -647,17 +637,17 @@ export function DeviceHealthAlerts({ connectedDevices }: { connectedDevices: Dev
         const ago = hrs > 0 ? `${hrs}h ${mins}m ago` : `${mins}m ago`;
         const fix = DEVICE_FIX[device.id] ?? "Check the device has power and your internet is working.";
         return (
-          <div key={device.id} style={{ background: "#1A0A0A", border: "1px solid #EF444430", borderRadius: 14, padding: "12px 16px", marginBottom: 8, display: "flex", alignItems: "flex-start", gap: 12 }}>
-            <div style={{ fontSize: 18, flexShrink: 0 }}>⚠️</div>
+          <div key={device.id} style={{ background: "#16140F", border: "1px solid #F59E0B24", borderRadius: 14, padding: "11px 14px", marginBottom: 8, display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <div style={{ fontSize: 16, flexShrink: 0 }}>⚠️</div>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#FCA5A5", marginBottom: 4 }}>
-                Your {device.name} went offline {ago}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#FCD34D", marginBottom: 3, letterSpacing: 0.2 }}>
+                {device.name} offline · {ago}
               </div>
-              <div style={{ fontSize: 12, color: "#D1D5DB", marginBottom: 4, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 11, color: "#C6D0DF", marginBottom: 3, lineHeight: 1.45 }}>
                 {fix}
               </div>
-              <div style={{ fontSize: 11, color: "#4B5563" }}>
-                Gridly has paused actions for this device until it's back online.
+              <div style={{ fontSize: 10, color: "#738197" }}>
+                Gridly is paused for this device until it reconnects.
               </div>
             </div>
           </div>
@@ -669,10 +659,14 @@ export function DeviceHealthAlerts({ connectedDevices }: { connectedDevices: Dev
 
 // ── NIGHTLY REPORT CARD ───────────────────────────────────────────────────
 export function NightlyReportCard() {
+  const summaryLine = "Battery and EV charged in low-cost windows.";
+  const nextLine = "Gridly prepared your home for today.";
+
   return (
-    <div style={{ margin: "0 20px 16px", background: "linear-gradient(135deg, #0D1F14, #0D1521)", border: "1px solid #22C55E20", borderRadius: 16, padding: "16px" }}>
-      <div style={{ fontSize: 11, color: "#22C55E", fontWeight: 700, letterSpacing: 1, marginBottom: 8 }}>⚡ WHAT GRIDLY DID LAST NIGHT</div>
-      <div style={{ fontSize: 13, color: "#D1FAE5", lineHeight: 1.7 }}>{SANDBOX.nightlyReport}</div>
+    <div style={{ margin: "0 20px 16px", background: "#0E1724", border: "1px solid #1D2B40", borderRadius: 16, padding: "12px 16px" }}>
+      <div style={{ fontSize: 10, color: "#7A8CA8", fontWeight: 700, letterSpacing: 0.8, marginBottom: 6 }}>LAST NIGHT</div>
+      <div style={{ fontSize: 12, color: "#D3DCE8", lineHeight: 1.45 }}>{summaryLine}</div>
+      <div style={{ fontSize: 12, color: "#A9B4C4", lineHeight: 1.45, marginTop: 2 }}>{nextLine}</div>
     </div>
   );
 }
@@ -769,8 +763,8 @@ export function ChargerLock({ connectedDevices }: { connectedDevices: DeviceConf
         onClick={() => setLocked(l => !l)}
         style={{
           width: "100%",
-          background: locked ? "#1A0A0A" : "#111827",
-          border: `1px solid ${locked ? "#EF444430" : "#1F2937"}`,
+          background: "#0B1120",
+          border: `1px solid ${locked ? "#3A2427" : "#182235"}`,
           borderRadius: 14,
           padding: "12px 16px",
           cursor: "pointer",
@@ -781,11 +775,11 @@ export function ChargerLock({ connectedDevices }: { connectedDevices: DeviceConf
         }}
       >
         <div style={{ textAlign: "left" }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: locked ? "#FCA5A5" : "#9CA3AF", marginBottom: 2 }}>
-            {locked ? "🔒 Charger locked" : "🔓 Charger unlocked"}
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#D7DEE8", marginBottom: 2 }}>
+            Charger access
           </div>
-          <div style={{ fontSize: 11, color: "#4B5563" }}>
-            {locked ? "No one can start a charge without Gridly" : "Tap to lock your charger remotely"}
+          <div style={{ fontSize: 11, color: locked ? "#C48E94" : "#6B7280" }}>
+            {locked ? "Gridly only" : "Ready to charge"}
           </div>
         </div>
 
@@ -793,7 +787,7 @@ export function ChargerLock({ connectedDevices }: { connectedDevices: DeviceConf
           style={{
             width: 36,
             height: 20,
-            background: locked ? "#EF4444" : "#374151",
+            background: locked ? "#7F1D1D" : "#2B3648",
             borderRadius: 99,
             position: "relative",
             flexShrink: 0,
@@ -853,8 +847,8 @@ export default function SimplifiedDashboard() {
   return (
     <div style={{ background: "#030712", minHeight: "100vh", color: "#F9FAFB", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto", maxWidth: 480, margin: "0 auto", paddingBottom: 80 }}>
       {tab === "home"    && <HomeTab connectedDevices={connectedDevices} now={now} />}
-      {tab === "plan"    && <PlanTab connectedDevices={connectedDevices} />}
-      {tab === "history" && <HistoryTab connectedDevices={connectedDevices} />}
+      {tab === "plan"    && <PlanTab connectedDevices={connectedDevices} now={now} />}
+      {tab === "history" && <HistoryTab connectedDevices={connectedDevices} now={now} />}
 
       <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: "#030712", borderTop: "1px solid #111827", padding: "10px 0 20px", display: "flex", justifyContent: "space-around" }}>
         {tabs.map(t => {

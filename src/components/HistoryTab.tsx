@@ -1,28 +1,423 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { SANDBOX, DeviceConfig } from "../pages/SimplifiedDashboard";
+import { ENERGY_COLORS } from "./energyColors";
+import {
+  buildHistoryViewModel,
+  isHistoryDeviceKey,
+  type ChargeSession,
+  type HistoryDay,
+  type HistoryDeviceKey,
+} from "../features/history/historyViewModels";
 
+const ENABLE_HISTORY_SIMULATION = import.meta.env.DEV;
 
-function ChargeSessionHistory() {
-  const [expanded, setExpanded] = useState(false);
-  const sessions = SANDBOX.chargeSessions;
-  const shown = expanded ? sessions : sessions.slice(0, 3);
-  const totalKwh = sessions.reduce((s, c) => s + c.kwh, 0).toFixed(0);
-  const totalCost = sessions.reduce((s, c) => s + c.cost, 0).toFixed(2);
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function toMinutes(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return (hours * 60) + minutes;
+}
+
+function buildLiveHistorySnapshot(now: Date, history: HistoryDay[], chargeSessions: ChargeSession[]) {
+  if (!history.length) {
+    return { history, chargeSessions };
+  }
+
+  const minuteOfDay = (now.getHours() * 60) + now.getMinutes();
+  const dayProgress = clamp((minuteOfDay - 5 * 60) / (18 * 60), 0.18, 1);
+
+  const liveHistory = history.map((day, index) => {
+    const isToday = index === history.length - 1;
+    if (!isToday) return day;
+
+    const solar = Number((day.solar * dayProgress).toFixed(2));
+    const battery = Number((day.battery * clamp(dayProgress + 0.04, 0.2, 1)).toFixed(2));
+    const ev = Number((day.ev * clamp(dayProgress + 0.08, 0.2, 1)).toFixed(2));
+    const grid = Number((day.grid * clamp(dayProgress, 0.2, 1)).toFixed(2));
+
+    return {
+      ...day,
+      solar,
+      battery,
+      ev,
+      grid,
+    };
+  });
+
+  const nowMinutes = minuteOfDay;
+  const liveSessions = chargeSessions
+    .map((session) => {
+      if (session.date !== "Today") return session;
+
+      const start = toMinutes(session.startTime);
+      const end = toMinutes(session.endTime);
+      if (start === null || end === null) return session;
+
+      const duration = Math.max(1, end - start);
+      const elapsed = clamp(nowMinutes - start, 0, duration);
+      const progress = clamp(elapsed / duration, 0, 1);
+
+      if (progress <= 0) return null;
+
+      return {
+        ...session,
+        kwh: Number((session.kwh * progress).toFixed(1)),
+        cost: Number((session.cost * progress).toFixed(2)),
+        carbonG: Math.round(session.carbonG * progress),
+      };
+    })
+    .filter((session): session is ChargeSession => session !== null);
+
+  return {
+    history: liveHistory,
+    chargeSessions: liveSessions,
+  };
+}
+
+function CollapsibleSection({
+  label,
+  children,
+  defaultOpen = false,
+}: {
+  label: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div style={{ background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, overflow: "hidden" }}>
-      <div style={{ padding: "14px 16px", borderBottom: "1px solid #1F2937", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div style={{ fontSize: 11, color: "#38BDF8", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>EV CHARGING SESSIONS</div>
-          <div style={{ fontSize: 13, color: "#9CA3AF" }}>{totalKwh} kWh · £{totalCost} last 10 sessions</div>
+    <div>
+      <button
+        onClick={() => setOpen((value) => !value)}
+        style={{
+          width: "100%",
+          background: "none",
+          border: "none",
+          padding: "16px 20px",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <span style={{ fontSize: 12.5, fontWeight: 550, color: "#8795AA", letterSpacing: 0.18 }}>{label}</span>
+        {open ? <ChevronUp size={14} color="#445066" strokeWidth={2.2} /> : <ChevronDown size={14} color="#445066" strokeWidth={2.2} />}
+      </button>
+      {open && <div style={{ paddingBottom: 10 }}>{children}</div>}
+    </div>
+  );
+}
+
+function DeliveredHeroCard({
+  weekTotal,
+  weekSavings,
+  weekEarnings,
+  freeDays,
+  allTimeDelivered,
+  allTimeSince,
+  allTimeEarned,
+}: {
+  weekTotal: number;
+  weekSavings: number;
+  weekEarnings: number;
+  freeDays: number;
+  allTimeDelivered: number;
+  allTimeSince: string;
+  allTimeEarned?: number;
+}) {
+  return (
+    <div className="mx-4 mt-5 overflow-hidden rounded-[20px] border border-[#182235] bg-[#0A111D] shadow-[0_14px_34px_rgba(1,7,20,0.32)]">
+      <div style={{ height: 1, background: `linear-gradient(90deg, ${ENERGY_COLORS.battery}90, ${ENERGY_COLORS.battery}20)` }} />
+      <div className="px-5 pb-5 pt-[18px]">
+        <div className="mb-3 flex items-center gap-2">
+          <div style={{ background: ENERGY_COLORS.battery, boxShadow: `0 0 8px ${ENERGY_COLORS.battery}95` }} className="h-[5px] w-[5px] rounded-full" />
+          <span className="text-[10px] font-semibold tracking-[0.9px] text-[#566279]">PROVEN THIS WEEK</span>
         </div>
+
+        <div className="mb-2 text-[28px] font-[820] leading-[1.1] tracking-[-0.8px] text-[#F3F7FF]">
+          £{weekTotal.toFixed(2)} delivered
+        </div>
+
+        <div className="mb-3 text-[12px] leading-[1.45] text-[#7C8BA2]">
+          Gridly consistently turned solar, storage, EV timing, and tariff shifts into measurable value.
+        </div>
+
+        <div className="mb-3 flex items-center gap-2">
+          <span className="rounded-full border border-[#1B2A40] bg-[#0C1627] px-[7px] py-[2px] text-[10px] font-semibold tracking-[0.3px] text-[#95ABC6]">
+            {freeDays}/7 consistent value days
+          </span>
+          <span className="text-[10px] text-[#697D96]">Reliable delivery across changing conditions.</span>
+        </div>
+
+        <div className="flex items-end gap-4 border-t border-[#162235] pt-3 tabular-nums">
+          <div className="min-w-[98px]">
+            <div className="mb-[3px] text-[10px] font-semibold tracking-[0.45px] text-[#566279]">Saved by Gridly</div>
+            <div className="text-[18px] font-extrabold tracking-[-0.4px] text-[#4ADE80]">£{weekSavings.toFixed(2)}</div>
+          </div>
+          <div className="min-w-[98px]">
+            <div className="mb-[3px] text-[10px] font-semibold tracking-[0.45px] text-[#566279]">Earned by Gridly</div>
+            <div className="text-[18px] font-extrabold tracking-[-0.4px] text-[#F5B942]">£{weekEarnings.toFixed(2)}</div>
+          </div>
+          <div className="ml-auto min-w-[80px] text-right">
+            <div className="mb-[3px] text-[10px] font-semibold tracking-[0.45px] text-[#566279]">Total</div>
+            <div className="text-[18px] font-extrabold tracking-[-0.4px] text-[#94A3B8]">£{weekTotal.toFixed(2)}</div>
+          </div>
+        </div>
+
+        <div className="mt-3 text-[10.5px] text-[#667A93]">
+          Tracking since {allTimeSince} · £{allTimeDelivered.toFixed(2)} all-time delivered
+          {typeof allTimeEarned === "number" && allTimeEarned > 0 ? ` · £${allTimeEarned.toFixed(2)} earned` : ""}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function contributionExplanation(deviceId: HistoryDeviceKey) {
+  if (deviceId === "solar") return "Solar covered more daytime demand and reduced import reliance.";
+  if (deviceId === "battery") return "Stored cheaper energy overnight and released it during peak periods.";
+  if (deviceId === "ev") return "EV charging captured lower overnight tariffs to cut charging cost.";
+  return "Smart meter orchestration captured value from dynamic import and export windows.";
+}
+
+function deviceDisplayName(deviceId: HistoryDeviceKey) {
+  if (deviceId === "solar") return "Solar inverter";
+  if (deviceId === "battery") return "Home battery";
+  if (deviceId === "ev") return "EV charger";
+  return "Smart meter";
+}
+
+function ValueContributionSection({
+  deviceBreakdown,
+  weekTotal,
+}: {
+  deviceBreakdown: ReturnType<typeof buildHistoryViewModel>["deviceBreakdown"];
+  weekTotal: number;
+}) {
+  return (
+    <div style={{ margin: "12px 16px 0", background: "#0B1120", borderRadius: 20, border: "1px solid #152238", padding: "16px 20px" }}>
+      <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.05, marginBottom: 12 }}>HOW VALUE WAS DELIVERED</div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {deviceBreakdown.map((device, index) => {
+          const pct = weekTotal > 0 ? Math.round((device.total / weekTotal) * 100) : 0;
+          const Icon = device.icon;
+          return (
+            <div
+              key={device.id}
+              style={{
+                display: "grid",
+                gap: 5,
+                paddingBottom: index < deviceBreakdown.length - 1 ? 10 : 0,
+                borderBottom: index < deviceBreakdown.length - 1 ? "1px solid #111A2B" : "none",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <Icon size={14} color={device.color} />
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "#DCE6F5" }}>{deviceDisplayName(device.id)}</span>
+                </div>
+                <div style={{ fontSize: 13, color: device.color, fontWeight: 700 }}>£{device.total.toFixed(2)}</div>
+              </div>
+              <div style={{ fontSize: 11, color: "#8394AB", lineHeight: 1.4 }}>
+                {contributionExplanation(device.id)} <span style={{ color: "#5F7088" }}>({pct}% of weekly value)</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function KeyMomentsSection({
+  moments,
+}: {
+  moments: ReturnType<typeof buildHistoryViewModel>["smartMoments"];
+}) {
+  if (moments.length === 0) return null;
+
+  return (
+    <div style={{ margin: "12px 16px 0", background: "#0B1120", borderRadius: 20, border: "1px solid #152238", padding: "16px 20px" }}>
+      <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.05, marginBottom: 12 }}>PROVEN MOMENTS</div>
+      {moments.slice(0, 4).map((moment, index) => (
+        <div
+          key={moment.id}
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+            paddingBottom: 12,
+            marginBottom: index < Math.min(moments.length, 4) - 1 ? 12 : 0,
+            borderBottom: index < Math.min(moments.length, 4) - 1 ? "1px solid #111A2B" : "none",
+          }}
+        >
+          <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#4ADE80", marginTop: 7, boxShadow: "0 0 4px #4ADE80, 0 0 8px #4ADE8055" }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 620, color: "#DCE6F5", marginBottom: 3 }}>{moment.title}</div>
+            <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>{moment.detail}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function WeekAtGlanceSection({
+  history,
+  activeDevice,
+  setActiveDevice,
+  connectedDevices,
+  values,
+  maxVal,
+  activeColor,
+  weeklyNarrative,
+  weekTotal,
+  selectedDayIndex,
+  setSelectedDayIndex,
+  selectedDayExplanations,
+}: {
+  history: HistoryDay[];
+  activeDevice: "all" | HistoryDeviceKey;
+  setActiveDevice: (value: "all" | HistoryDeviceKey) => void;
+  connectedDevices: DeviceConfig[];
+  values: number[];
+  maxVal: number;
+  activeColor: string;
+  weeklyNarrative: string;
+  weekTotal: number;
+  selectedDayIndex: number;
+  setSelectedDayIndex: (index: number) => void;
+  selectedDayExplanations: string[];
+}) {
+  const resolvedIndex = history.length === 0 ? 0 : Math.min(Math.max(0, selectedDayIndex), history.length - 1);
+  const selectedDay = history[resolvedIndex];
+  const selectedValue = values[resolvedIndex] ?? 0;
+
+  return (
+    <div style={{ margin: "12px 16px 0", background: "#09101A", borderRadius: 18, border: "1px solid #172236", padding: "14px 16px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1 }}>WEEKLY PROOF</div>
+        <div style={{ fontSize: 10.5, color: "#74869E" }}>£{weekTotal.toFixed(2)} total</div>
+      </div>
+
+      <div style={{ fontSize: 11, color: "#7E90A9", lineHeight: 1.45, marginBottom: 10 }}>
+        £{weekTotal.toFixed(2)} delivered across the week.
+      </div>
+      <div style={{ fontSize: 10.5, color: "#657990", lineHeight: 1.45, marginBottom: 12 }}>
+        {weeklyNarrative}
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+        <button
+          onClick={() => setActiveDevice("all")}
+          style={{
+            padding: "4px 10px",
+            borderRadius: 20,
+            border: "none",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            fontSize: 10.5,
+            fontWeight: 700,
+            background: activeDevice === "all" ? "#172438" : "#101927",
+            color: activeDevice === "all" ? "#C8D8EB" : "#6E7F97",
+          }}
+        >
+          All
+        </button>
+
+        {connectedDevices
+          .filter((device): device is DeviceConfig & { id: HistoryDeviceKey } => isHistoryDeviceKey(device.id))
+          .map((device) => (
+            <button
+              key={device.id}
+              onClick={() => setActiveDevice(device.id)}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 20,
+                border: "none",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                fontSize: 10.5,
+                fontWeight: 700,
+                background: activeDevice === device.id ? "#172438" : "#101927",
+                color: activeDevice === device.id ? "#C8D8EB" : "#6E7F97",
+              }}
+            >
+              {device.name.split(" ")[0]}
+            </button>
+          ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 4, alignItems: "flex-end", height: 44, marginBottom: 4 }}>
+        {history.map((day, i) => {
+          const val = values[i] ?? 0;
+          const h = Math.max(2, maxVal > 0 ? (val / maxVal) * 44 : 2);
+          const isSelected = i === resolvedIndex;
+          return (
+            <button
+              key={day.day}
+              onClick={() => setSelectedDayIndex(i)}
+              title={`${day.day}: £${val.toFixed(2)}`}
+              style={{
+                flex: 1,
+                height: h,
+                background: isSelected ? activeColor : `${activeColor}33`,
+                border: "none",
+                borderRadius: "2px 2px 0 0",
+                cursor: "pointer",
+                padding: 0,
+              }}
+              aria-label={`Select ${day.day}`}
+            />
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+        {history.map((day, i) => (
+          <div key={`${day.day}-label`} style={{ flex: 1, fontSize: 9, textAlign: "center", color: i === resolvedIndex ? "#AFC3DD" : "#41516A" }}>
+            {i === history.length - 1 ? "Today" : day.day}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 10, borderTop: "1px solid #162235", paddingTop: 10 }}>
+        <div style={{ fontSize: 11.5, color: "#C8D8EB", fontWeight: 620, marginBottom: 7 }}>
+          {selectedDay ? `${selectedDay.day} · £${selectedValue.toFixed(2)} delivered` : "Select a day to inspect delivered value."}
+        </div>
+        {selectedDayExplanations.length > 0 ? (
+          <div style={{ display: "grid", gap: 4 }}>
+            {selectedDayExplanations.map((line) => (
+              <div key={line} style={{ fontSize: 10.5, color: "#70839B", lineHeight: 1.45 }}>• {line}</div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: 10.5, color: "#70839B" }}>Gridly balanced demand and tariff windows automatically that day.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SessionDetailsCard({ sessions }: { sessions: ChargeSession[] }) {
+  const shown = sessions.slice(0, 4);
+  const totalKwh = sessions.reduce((sum, session) => sum + session.kwh, 0).toFixed(1);
+  const totalCost = sessions.reduce((sum, session) => sum + session.cost, 0).toFixed(2);
+
+  return (
+    <div style={{ margin: "0 20px 10px", background: "#0A111D", border: "1px solid #182235", borderRadius: 14, overflow: "hidden" }}>
+      <div style={{ padding: "12px 14px", borderBottom: "1px solid #182235", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontSize: 10.5, color: "#7F91A9" }}>EV charging details · {totalKwh}kWh · £{totalCost}</div>
         <button
           onClick={() => {
             const csv = [
               "Date,Start,End,kWh,Cost (£),Avg (p/kWh),Carbon (gCO2)",
-              ...sessions.map(
-                s => `${s.date},${s.startTime},${s.endTime},${s.kwh},${s.cost},${s.avgPence},${s.carbonG}`
-              )
+              ...sessions.map((s) => `${s.date},${s.startTime},${s.endTime},${s.kwh},${s.cost},${s.avgPence},${s.carbonG}`),
             ].join("\n");
 
             const blob = new Blob([csv], { type: "text/csv" });
@@ -32,92 +427,81 @@ function ChargeSessionHistory() {
             a.download = "gridly-sessions.csv";
             a.click();
           }}
-          style={{ background: "#1F2937", border: "none", borderRadius: 8, padding: "5px 10px", color: "#9CA3AF", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}
+          style={{ background: "transparent", border: "1px solid #223044", borderRadius: 8, padding: "4px 8px", color: "#7F8DA3", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
         >
           Export CSV
         </button>
       </div>
-
       <div>
-        {shown.map((s, i) => (
-          <div key={i} style={{ padding: "10px 16px", borderBottom: i < shown.length - 1 ? "1px solid #111827" : "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#F9FAFB", marginBottom: 2 }}>
-                {s.date} · {s.startTime}–{s.endTime}
+        {shown.length === 0 ? (
+          <div style={{ padding: "10px 14px", fontSize: 11, color: "#65768D" }}>No charging sessions recorded.</div>
+        ) : (
+          shown.map((session, i) => (
+            <div key={`${session.date}-${session.startTime}-${i}`} style={{ padding: "10px 14px", borderBottom: i < shown.length - 1 ? "1px solid #111A2B" : "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 11.5, color: "#D7E2F2", fontWeight: 600 }}>{session.date} · {session.startTime}–{session.endTime}</div>
+                <div style={{ fontSize: 10, color: "#667A93" }}>{session.kwh}kWh · {session.avgPence}p avg</div>
               </div>
-              <div style={{ fontSize: 10, color: "#4B5563" }}>
-                {s.kwh} kWh · avg {s.avgPence}p · {(s.carbonG / 1000).toFixed(1)} kg CO₂
-              </div>
+              <div style={{ fontSize: 12, color: "#8CC4FF", fontWeight: 700 }}>£{session.cost.toFixed(2)}</div>
             </div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: "#38BDF8" }}>£{s.cost}</div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
-
-      {sessions.length > 3 && (
-        <button
-          onClick={() => setExpanded(e => !e)}
-          style={{ width: "100%", background: "none", border: "none", borderTop: "1px solid #111827", padding: "10px", color: "#4B5563", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
-        >
-          {expanded ? "Show less" : `Show all ${sessions.length} sessions`}
-        </button>
-      )}
     </div>
   );
 }
 
-export default function HistoryTab({
-  connectedDevices,
-}: {
-  connectedDevices: DeviceConfig[];
-}) {
-  const [activeDevice, setActiveDevice] = useState<string>("all");
+export default function HistoryTab({ connectedDevices, now }: { connectedDevices: DeviceConfig[]; now: Date }) {
+  const [activeDevice, setActiveDevice] = useState<"all" | HistoryDeviceKey>("all");
   const [shareStatus, setShareStatus] = useState<string | null>(null);
+  const [selectedDayIndex, setSelectedDayIndex] = useState(0);
 
-  const history = Array.isArray(SANDBOX?.history) ? SANDBOX.history : [];
+  const baseHistory = (Array.isArray(SANDBOX?.history) ? SANDBOX.history : []) as HistoryDay[];
+  const baseChargeSessions = (Array.isArray(SANDBOX?.chargeSessions) ? SANDBOX.chargeSessions : []) as ChargeSession[];
 
-  if (history.length === 0) {
-    return (
-      <div style={{ padding: "44px 24px 0", color: "#9CA3AF" }}>
-        History data is temporarily unavailable.
-      </div>
-    );
+  const liveSnapshot = useMemo(
+    () => ENABLE_HISTORY_SIMULATION ? buildLiveHistorySnapshot(now, baseHistory, baseChargeSessions) : { history: baseHistory, chargeSessions: baseChargeSessions },
+    [now, baseHistory, baseChargeSessions]
+  );
+
+  const history = liveSnapshot.history;
+  const currentWeekHistory = history.slice(-7);
+  const chargeSessions = liveSnapshot.chargeSessions;
+
+  useEffect(() => {
+    setSelectedDayIndex(Math.max(0, currentWeekHistory.length - 1));
+  }, [currentWeekHistory.length]);
+
+  if (currentWeekHistory.length === 0) {
+    return <div style={{ padding: "44px 24px 0", color: "#9CA3AF" }}>History data is temporarily unavailable.</div>;
   }
 
-  const values = history.map(d => {
-    if (activeDevice === "all") return d.solar + d.battery + d.ev + d.grid;
-    return (d as any)[activeDevice] ?? 0;
+  const viewModel = buildHistoryViewModel({
+    history,
+    chargeSessions,
+    connectedDevices,
+    activeDevice,
+    allTimeDelivered: SANDBOX.allTime,
+    allTimeSince: SANDBOX.allTimeSince,
   });
 
-  const maxVal = Math.max(...values);
-  const weekTotal = values.reduce((s, v) => s + v, 0).toFixed(2);
+  const selectedDayExplanation = viewModel.dayExplanations[selectedDayIndex] ?? [];
+  const selectedDayExplanations = selectedDayExplanation.length > 0 ? selectedDayExplanation : viewModel.fallbackExplanation;
 
-  const activeColor =
-    activeDevice === "all"
-      ? "#22C55E"
-      : connectedDevices.find(d => d.id === activeDevice)?.historyColor ?? "#22C55E";
-
-  const deviceTotals = connectedDevices.map(device => ({
-    ...device,
-    total: history
-      .reduce((s, d) => s + ((d as any)[device.id] ?? 0), 0)
-      .toFixed(2),
-  }));
-
-  const weeklySummary = {
-    weekTotal,
-    topDevice: [...deviceTotals].sort((a, b) => parseFloat(b.total) - parseFloat(a.total))[0],
-    entries: deviceTotals.map(d => ({ id: d.id, name: d.name, total: d.total })),
-  };
-
-  const weeklySummaryText = `Gridly weekly summary: £${weekTotal} saved. Top device: ${weeklySummary.topDevice?.name ?? "N/A"} (£${weeklySummary.topDevice?.total ?? "0.00"}).`;
+  const topContributorName = viewModel.topDevice ? deviceDisplayName(viewModel.topDevice.id) : "Gridly";
+  const weeklyNarrative =
+    viewModel.weekEarnings > 0
+      ? `${topContributorName} remained a strong value driver while export and overnight charging windows added consistent gains.`
+      : `${topContributorName} remained the strongest value driver while Gridly shifted demand into cheaper windows.`;
 
   const exportWeeklyReport = () => {
     const report = {
       generatedAt: new Date().toISOString(),
-      weekTotal: weeklySummary.weekTotal,
-      topDevice: weeklySummary.topDevice?.name ?? null,
-      devices: weeklySummary.entries,
+      weekTotal: viewModel.weekTotal,
+      weekSavings: viewModel.weekSavings,
+      weekEarnings: viewModel.weekEarnings,
+      topDevice: viewModel.topDevice?.name ?? null,
+      devices: viewModel.deviceBreakdown.map((device) => ({ id: device.id, name: device.name, total: device.total })),
     };
 
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
@@ -130,10 +514,10 @@ export default function HistoryTab({
 
   const copyWeeklySummary = async () => {
     try {
-      await navigator.clipboard.writeText(weeklySummaryText);
-      setShareStatus("Weekly summary copied");
+      await navigator.clipboard.writeText(viewModel.weeklySummaryText);
+      setShareStatus("Weekly recap copied");
     } catch {
-      setShareStatus("Could not copy summary");
+      setShareStatus("Could not copy recap");
     }
   };
 
@@ -142,8 +526,9 @@ export default function HistoryTab({
       setShareStatus("Share not supported on this device");
       return;
     }
+
     try {
-      await navigator.share({ title: "Gridly weekly savings", text: weeklySummaryText });
+      await navigator.share({ title: "Gridly weekly delivery", text: viewModel.weeklySummaryText });
       setShareStatus("Shared successfully");
     } catch {
       setShareStatus("Share cancelled");
@@ -151,190 +536,66 @@ export default function HistoryTab({
   };
 
   return (
-    <div style={{ padding: "44px 0 0" }}>
-      <div style={{ padding: "0 24px 20px" }}>
-        <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: -0.8, marginBottom: 2 }}>
-          Your savings
-        </div>
-        <div style={{ fontSize: 13, color: "#6B7280" }}>
-          Every penny Gridly has made you
-        </div>
-      </div>
+    <div style={{ background: "#060A12", minHeight: "100vh", paddingBottom: 40 }}>
+      <DeliveredHeroCard
+        weekTotal={viewModel.weekTotal}
+        weekSavings={viewModel.weekSavings}
+        weekEarnings={viewModel.weekEarnings}
+        freeDays={viewModel.freeDays}
+        allTimeDelivered={viewModel.allTimeDelivered}
+        allTimeSince={viewModel.allTimeSince}
+        allTimeEarned={viewModel.allTimeEarned}
+      />
 
-      <div style={{ margin: "0 20px 16px" }}>
-        <ChargeSessionHistory />
-      </div>
+      <ValueContributionSection
+        deviceBreakdown={viewModel.deviceBreakdown}
+        weekTotal={viewModel.weekTotal}
+      />
 
-      <div style={{ margin: "0 20px 16px", background: "linear-gradient(135deg, #0a0a0a, #111827)", border: "1px solid #1F2937", borderRadius: 20, padding: "24px", textAlign: "center" }}>
-        <div style={{ fontSize: 11, color: "#4B5563", letterSpacing: 1, fontWeight: 700, marginBottom: 8 }}>
-          ALL TIME SAVINGS
-        </div>
-        <div style={{ fontSize: 52, fontWeight: 900, color: "#22C55E", letterSpacing: -3, lineHeight: 1 }}>
-          +£{SANDBOX.allTime}
-        </div>
-        <div style={{ fontSize: 12, color: "#4B5563", marginTop: 8 }}>
-          since {SANDBOX.allTimeSince}
-        </div>
-      </div>
+      <KeyMomentsSection moments={viewModel.smartMoments} />
 
-      <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "16px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div>
-            <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>
-              THIS WEEK
+      <WeekAtGlanceSection
+        history={currentWeekHistory}
+        activeDevice={activeDevice}
+        setActiveDevice={setActiveDevice}
+        connectedDevices={connectedDevices}
+        values={viewModel.values}
+        maxVal={viewModel.maxValue}
+        activeColor={viewModel.activeColor}
+        weeklyNarrative={weeklyNarrative}
+        weekTotal={viewModel.weekTotal}
+        selectedDayIndex={selectedDayIndex}
+        setSelectedDayIndex={setSelectedDayIndex}
+        selectedDayExplanations={selectedDayExplanations}
+      />
+
+      <div style={{ margin: "24px 0 0" }}>
+        <div style={{ borderTop: "1px solid #0A1020" }}>
+          <CollapsibleSection label="Detailed history">
+            <div style={{ margin: "0 20px 12px", fontSize: 12, color: "#8EA0B8", lineHeight: 1.55 }}>
+              {viewModel.weeklyRecap}
             </div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: activeColor }}>
-              £{weekTotal}
-              <span style={{ fontSize: 12, color: "#6B7280", fontWeight: 500, marginLeft: 6 }}>
-                {activeDevice === "all"
-                  ? "all devices"
-                  : connectedDevices.find(d => d.id === activeDevice)?.name}
-              </span>
-            </div>
-          </div>
-        </div>
 
-        <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-          <button
-            onClick={() => setActiveDevice("all")}
-            style={{
-              padding: "4px 12px",
-              borderRadius: 20,
-              border: "none",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              fontSize: 11,
-              fontWeight: 700,
-              background: activeDevice === "all" ? "#22C55E" : "#1F2937",
-              color: activeDevice === "all" ? "#111827" : "#6B7280",
-            }}
-          >
-            All
-          </button>
-
-          {connectedDevices.map(device => (
-            <button
-              key={device.id}
-              onClick={() => setActiveDevice(device.id)}
-              style={{
-                padding: "4px 12px",
-                borderRadius: 20,
-                border: "none",
-                cursor: "pointer",
-                fontFamily: "inherit",
-                fontSize: 11,
-                fontWeight: 700,
-                background: activeDevice === device.id ? device.historyColor : "#1F2937",
-                color: activeDevice === device.id ? "#111827" : "#6B7280",
-              }}
-            >
-              {device.name.split(" ")[0]}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 6, alignItems: "flex-end", height: 72, marginBottom: 8 }}>
-          {history.map((d, i) => {
-            const val = values[i];
-            const h = Math.max(4, maxVal > 0 ? (val / maxVal) * 72 : 4);
-            const isToday = i === history.length - 1;
-
-            return (
-              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
-                {isToday && (
-                  <div style={{ fontSize: 9, color: activeColor, fontWeight: 700, marginBottom: 2 }}>
-                    £{val.toFixed(2)}
-                  </div>
-                )}
-                <div
-                  style={{
-                    width: "100%",
-                    height: h,
-                    background: isToday ? activeColor : `${activeColor}40`,
-                    borderRadius: "3px 3px 0 0",
-                  }}
-                />
-              </div>
-            );
-          })}
-        </div>
-
-        <div style={{ display: "flex", gap: 6 }}>
-          {history.map((d, i) => (
-            <div
-              key={i}
-              style={{
-                flex: 1,
-                textAlign: "center",
-                fontSize: 10,
-                color: i === history.length - 1 ? "#F9FAFB" : "#4B5563",
-                fontWeight: i === history.length - 1 ? 700 : 400,
-              }}
-            >
-              {i === history.length - 1 ? "Today" : d.day}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "16px" }}>
-        <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 8 }}>
-          SHARE YOUR WINS
-        </div>
-        <div style={{ fontSize: 13, color: "#D1D5DB", marginBottom: 10 }}>
-          {weeklySummaryText}
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={copyWeeklySummary} style={{ background: "#1F2937", border: "none", borderRadius: 8, padding: "8px 10px", color: "#E5E7EB", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Copy summary</button>
-          <button onClick={exportWeeklyReport} style={{ background: "#1F2937", border: "none", borderRadius: 8, padding: "8px 10px", color: "#E5E7EB", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Export CSV</button>
-          <button onClick={shareWeeklySummary} style={{ background: "#1F2937", border: "none", borderRadius: 8, padding: "8px 10px", color: "#E5E7EB", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Share</button>
-        </div>
-        {shareStatus && <div style={{ marginTop: 8, fontSize: 11, color: "#9CA3AF" }}>{shareStatus}</div>}
-      </div>
-
-      <div style={{ margin: "0 20px" }}>
-        <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>
-          BREAKDOWN BY DEVICE
-        </div>
-        <div style={{ display: "grid", gap: 8 }}>
-          {deviceTotals.map(device => {
-            const Icon = device.icon;
-            const pct = Math.round(
-              (parseFloat(device.total) / parseFloat(weekTotal === "0.00" ? "1" : weekTotal)) * 100
-            );
-
-            return (
-              <div key={device.id} style={{ background: "#111827", borderRadius: 12, padding: "12px 16px", border: "1px solid #1F2937" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <Icon size={15} color={device.color} />
-                    <span style={{ fontSize: 13, fontWeight: 600, color: "#F9FAFB" }}>
-                      {device.name}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: device.color }}>
-                    £{device.total}
-                  </div>
-                </div>
-
-                <div style={{ height: 3, background: "#1F2937", borderRadius: 2 }}>
-                  <div
-                    style={{
-                      height: "100%",
-                      width: `${pct}%`,
-                      background: device.color,
-                      borderRadius: 2,
-                      transition: "width 0.4s ease",
-                    }}
-                  />
-                </div>
-
-                <div style={{ fontSize: 10, color: "#4B5563", marginTop: 4 }}>
-                  {pct}% of this week's savings
+            {viewModel.weeklyComparison.explanations.length > 0 && (
+              <div style={{ margin: "0 20px 12px", background: "#0A111D", border: "1px solid #182235", borderRadius: 14, padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, color: "#5B6E87", fontWeight: 700, letterSpacing: 0.7, marginBottom: 6 }}>COMPARED TO LAST WEEK</div>
+                <div style={{ display: "grid", gap: 5 }}>
+                  {viewModel.weeklyComparison.explanations.map((line) => (
+                    <div key={line} style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>• {line}</div>
+                  ))}
                 </div>
               </div>
-            );
-          })}
+            )}
+
+            <SessionDetailsCard sessions={chargeSessions} />
+
+            <div style={{ margin: "0 20px 4px", display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={copyWeeklySummary} style={{ background: "transparent", border: "1px solid #223044", borderRadius: 8, padding: "6px 10px", color: "#7F8DA3", fontSize: 10.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Copy recap</button>
+              <button onClick={exportWeeklyReport} style={{ background: "transparent", border: "1px solid #223044", borderRadius: 8, padding: "6px 10px", color: "#7F8DA3", fontSize: 10.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Export report</button>
+              <button onClick={shareWeeklySummary} style={{ background: "transparent", border: "1px solid #223044", borderRadius: 8, padding: "6px 10px", color: "#7F8DA3", fontSize: 10.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Share</button>
+            </div>
+            {shareStatus && <div style={{ margin: "8px 20px 0", fontSize: 10.5, color: "#7F8DA3" }}>{shareStatus}</div>}
+          </CollapsibleSection>
         </div>
       </div>
     </div>

@@ -1,197 +1,650 @@
-import { useMemo, useState } from "react";
-import FlowDot from "./FlowDot";
+import { useMemo, useState, type ReactNode } from "react";
 import { optimizePlan } from "../engine/core/optimizePlan";
 import { explainPlan } from "../engine/core/explainPlan";
 import { mapEngineToHome } from "../features/home/mapEngineToHome";
-import {
-  buildAiRecommendation,
-  recordAiFeedback,
-  type OptimisationGoal,
-} from "../lib/aiCopilot";
-import { Battery, Home, Sun, TrendingUp, Zap } from "lucide-react";
-import TomorrowForecast from "../pages/TomorrowForecast";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { buildDayPlan } from "../lib/dayPlanner";
 import { AGILE_RATES } from "../data/agileRates";
 import {
   SANDBOX,
-  getCurrentSlotIndex,
-  getBestChargeSlot,
-  DeviceHealthAlerts,
   NightlyReportCard,
-  BoostButton,
   ChargerLock,
-  CarbonTracker,
   ManualOverride,
   EVReadyBy,
   BatteryReserve,
   SolarForecastCard,
-  CrossDeviceCoordination,
   BatteryHealthScore,
   TariffSwitcher,
   DeviceConfig,
 } from "../pages/SimplifiedDashboard";
+import { ENERGY_COLORS } from "./energyColors";
+import { FlowConnector, FlowNode } from "./flowPrimitives";
+import { TIMELINE_EMPHASIS_TOKENS, timelineDotGlow } from "./timelineEmphasisTokens";
+import DecisionExplanationSheet from "./DecisionExplanationSheet";
+import { buildDecisionExplanation } from "../lib/decisionExplanation";
 
-function actionToColor(action?: string): string {
-  const normalized = action?.toLowerCase().trim();
-  if (normalized === "charge" || normalized === "charging") return "#22C55E";
-  if (normalized === "export" || normalized === "exporting") return "#10B981";
-  return "#9CA3AF";
+const ENABLE_HOME_SIMULATION = import.meta.env.DEV;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
-function actionToLabel(action?: string): string {
-  switch (action) {
-    case "charge":
-      return "CHARGING";
-    case "export":
-      return "SELLING";
-    case "discharge":
-      return "DISCHARGING";
-    case "import":
-      return "IMPORTING";
-    case "hold":
-    default:
-      return "HOLDING";
+function buildLiveSolarState(
+  now: Date,
+  base: { w: number; batteryPct: number; gridW: number; homeW: number },
+  options: { hasSolar: boolean; hasBattery: boolean; hasGrid: boolean }
+) {
+  const minuteOfDay = now.getHours() * 60 + now.getMinutes();
+  const dayProgress = minuteOfDay / 1440;
+  const dayPhase = dayProgress * Math.PI * 2;
+  const daylightCurve = Math.max(0, Math.sin(((minuteOfDay - 360) / 720) * Math.PI));
+
+  const solarW = options.hasSolar
+    ? Math.round((500 + 2600 * daylightCurve) * (0.95 + 0.05 * Math.sin(dayPhase * 3)))
+    : 0;
+
+  const eveningBoost = minuteOfDay >= 17 * 60 && minuteOfDay <= 21 * 60 ? 220 : 0;
+  const homeW = Math.round(clamp(base.homeW + 220 * Math.sin(dayPhase - 1.1) + eveningBoost, 700, 2600));
+
+  const batteryPct = options.hasBattery
+    ? Math.round(clamp(base.batteryPct + 10 * Math.sin(dayPhase - 0.8), 12, 96))
+    : 0;
+
+  const batteryContribution = options.hasBattery ? Math.round((batteryPct - 50) * 8) : 0;
+  const gridRaw = homeW - solarW - batteryContribution;
+  const gridW = options.hasGrid ? Math.round(clamp(gridRaw, -3200, 3200)) : 0;
+
+  return {
+    w: solarW,
+    batteryPct,
+    gridW,
+    homeW,
+  };
+}
+
+function buildLiveDeviceHealth(
+  now: Date,
+  base: Record<string, { ok: boolean; lastSeen: number }>
+) {
+  const minuteOfDay = now.getHours() * 60 + now.getMinutes();
+  const result: Record<string, { ok: boolean; lastSeen: number }> = {
+    ...base,
+  };
+
+  const ev = result.ev;
+  if (ev) {
+    const cycleMinutes = 90;
+    const offlineWindowMinutes = 25;
+    const cyclePosition = minuteOfDay % cycleMinutes;
+    const evOffline = cyclePosition < offlineWindowMinutes;
+    result.ev = {
+      ok: !evOffline,
+      lastSeen: evOffline ? 5 + cyclePosition : 2,
+    };
   }
+
+  if (result.solar) result.solar = { ok: true, lastSeen: 1 + (minuteOfDay % 3) };
+  if (result.battery) result.battery = { ok: true, lastSeen: 1 + ((minuteOfDay + 1) % 3) };
+  if (result.grid) result.grid = { ok: true, lastSeen: 1 + ((minuteOfDay + 2) % 4) };
+
+  return result;
 }
 
-function actionToFriendlyLabel(action?: string): string {
-  switch (action) {
+function slotToTime(slot: number): string {
+  const h = Math.floor(slot / 2).toString().padStart(2, "0");
+  const m = slot % 2 === 0 ? "00" : "30";
+  return `${h}:${m}`;
+}
+
+function actionColor(action?: string): string {
+  const normalized = action?.toLowerCase().trim();
+  if (normalized === "charge" || normalized === "charging") return ENERGY_COLORS.battery;
+  if (normalized === "export" || normalized === "exporting") return ENERGY_COLORS.solar;
+  return "#6B7280";
+}
+
+
+function homeActionLabel({
+  action,
+  reason,
+  hasEV,
+}: {
+  action?: string;
+  reason?: string;
+  hasEV: boolean;
+}): string {
+  const normalized = action?.toLowerCase().trim();
+  const normalizedReason = (reason ?? "").toLowerCase();
+
+  switch (normalized) {
     case "charge":
-      return "Charging";
+      return hasEV ? "Charging EV now" : "Charging now";
     case "export":
-      return "Exporting";
+      return "Exporting at strong rates";
     case "discharge":
-      return "Discharging";
+      return "Powering your home from battery";
     case "import":
-      return "Importing";
+      return "Importing from grid";
     case "hold":
     default:
-      return "Holding";
+      if (normalizedReason.includes("strong solar is expected soon")) {
+        return "Holding until solar arrives";
+      }
+      return "Holding steady";
   }
 }
 
 function shortenReason(reason?: string): string {
   if (!reason) return "";
-  if (reason.includes("Strong solar is expected soon")) return "Solar expected soon — delaying charge";
-  if (reason.includes("Import price is in a cheap window")) return "Cheap import window";
-  if (reason.includes("Export price is high")) return "Peak export value";
-  // Truncate long reasons
-  if (reason.length > 50) return reason.substring(0, 47) + "...";
+  if (reason.includes("Strong solar is expected soon")) return "Solar incoming";
+  if (reason.includes("Import price is in a cheap window")) return "Cheap tariff";
+  if (reason.includes("Export price is high")) return "High export";
+  if (reason.length > 22) return `${reason.substring(0, 20)}…`;
   return reason;
 }
 
-function mergeConsecutiveTimeline(timeline: any[]): TimelineRow[] {
-  const result: TimelineRow[]  = [];
-  for (const item of timeline) {
-    const friendlyAction = actionToFriendlyLabel(item.action);
-    const shortReason = shortenReason(item.reason);
-    const last = result[result.length - 1];
-    if (last && last.friendlyAction === friendlyAction && last.shortReason === shortReason) {
-      // Skip duplicate
-    } else {
-      result.push({ ...item, friendlyAction, shortReason });
-    }
+function conciseHeroHeadline(): string {
+  return "Optimising quietly";
+}
+
+function buildHeroDecisionReason({
+  action,
+  reason,
+  currentPence,
+}: {
+  action?: string;
+  reason?: string;
+  currentPence: number;
+}) {
+  const normalizedAction = action?.toLowerCase().trim();
+  if (normalizedAction === "charge") {
+    return `Charging now at ${currentPence.toFixed(1)}p to prepare your home for later.`;
   }
-  return result;
-}
-
-function slotToTimeLabel(slot: number): string {
-  const hours = Math.floor(slot / 2);
-  const minutes = slot % 2 === 0 ? "00" : "30";
-  return `${hours.toString().padStart(2, "0")}:${minutes}`;
-}
-
-function actionToIcon(action?: string): string {
-  switch (action) {
-    case "charge":
-      return "⚡";
-    case "export":
-      return "↗";
-    case "hold":
-    default:
-      return "⏸";
+  if (normalizedAction === "export") {
+    return "Exporting now while rates are strong and your home remains protected.";
   }
+  if (normalizedAction === "discharge") {
+    return "Using battery now to reduce higher-cost grid use.";
+  }
+  if (reason?.includes("Strong solar is expected soon")) {
+    return "Holding steady now because stronger solar is expected shortly.";
+  }
+  return "Balancing cost, comfort, and readiness in real time.";
 }
 
-type TimelineRow = {
+function buildHomeReassuranceNote({
+  hasEV,
+  hasBattery,
+  hasSolar,
+  solarForecastKwh,
+  batteryPct,
+  slotIndex,
+}: {
+  hasEV: boolean;
+  hasBattery: boolean;
+  hasSolar: boolean;
+  solarForecastKwh: number;
+  batteryPct: number;
+  slotIndex: number;
+}) {
+  const options: string[] = [];
+
+  if (hasEV) options.push("EV ready by target time remains on track.");
+  if (hasBattery) {
+    options.push(batteryPct >= 25
+      ? "Battery reserve is protected for higher-cost periods."
+      : "Battery reserve is being rebuilt to protect evening demand.");
+  }
+  if (hasSolar && solarForecastKwh >= 10) {
+    options.push("Solar is expected to cover most daytime demand.");
+  }
+
+  if (!options.length) return "Gridly is continuously adapting to keep your home stable and efficient.";
+  return options[slotIndex % options.length];
+}
+
+function buildFlowInterpretation({
+  hasSolar,
+  hasBattery,
+  hasEV,
+  isCharging,
+  isExporting,
+}: {
+  hasSolar: boolean;
+  hasBattery: boolean;
+  hasEV: boolean;
+  isCharging: boolean;
+  isExporting: boolean;
+}) {
+  if (isExporting && hasBattery) return "Your home is powered while Gridly exports at stronger rates.";
+  if (hasSolar && hasBattery && !isCharging) return "Most demand is being covered by solar and battery right now.";
+  if (hasEV && isCharging) return "Gridly is charging your EV now while keeping home comfort protected.";
+  if (hasBattery && isCharging) return "Gridly is topping up storage now to protect later higher-cost periods.";
+  return "Gridly is continuously routing energy to keep your home efficient and stable.";
+}
+
+type TimelineItem = {
   slot: number;
   action: string;
+  label: string;
   reason: string;
-  friendlyAction: string;
-  shortReason: string;
+  reasoning: string[];
+  liveLabel?: "Now" | "Up next";
 };
 
-type HeroViewModel = {
-  title: string;
-  subtitle: string;
-  icon: string;
-  color: string;
-  border: string;
-  bg: string;
-  savingsText?: string;
-  confidenceText?: string;
-  plannedActionsText: string;
-};
+export type HomeTimelineEmphasis = "active" | "soon" | "planned" | "default";
 
-type TimelineViewModel = {
-  rows: TimelineRow[];
-  currentSlot: number;
-};
+function forwardSlotDistance(currentSlot: number, rowSlot: number) {
+  const normalizedCurrent = ((currentSlot % 48) + 48) % 48;
+  const normalizedRow = ((rowSlot % 48) + 48) % 48;
+  return normalizedRow >= normalizedCurrent
+    ? normalizedRow - normalizedCurrent
+    : (normalizedRow + 48) - normalizedCurrent;
+}
 
-type BriefViewModel = {
-  title: string;
-  reason: string;
-  confidence: number;
-  expectedSavings: string;
-  status: string;
-};
+function isMeaningfulHomeAction(row: { action: string }) {
+  const action = row.action.toLowerCase().trim();
+  return action !== "hold";
+}
 
-type BriefProps = {
-  viewModel: BriefViewModel;
-  showHelp: boolean;
-  showControls: boolean;
-  optimisationGoal: OptimisationGoal;
-  minBatteryReserve: number;
-  setShowHelp: (value: boolean) => void;
-  setShowControls: (value: boolean) => void;
-  setOptimisationGoal: (goal: OptimisationGoal) => void;
-  setMinBatteryReserve: (value: number) => void;
-};
+export function deriveHomeTimelineEmphasis(
+  rows: Array<{ slot: number; action: string; label: string }>,
+  currentSlot: number
+): HomeTimelineEmphasis[] {
+  if (!rows.length) return [];
 
-const GOAL_OPTIONS: { id: OptimisationGoal; label: string; hint: string }[] = [
-  { id: "MAX_SAVINGS", label: "Save most", hint: "Prioritise lowest cost and export value" },
-  { id: "LOWEST_CARBON", label: "Lowest carbon", hint: "Shift usage into cleaner grid windows" },
-  { id: "BATTERY_CARE", label: "Battery care", hint: "Reduce deep cycling to extend lifespan" },
-  { id: "EV_READY", label: "EV ready", hint: "Prioritise hitting your ready-by target" },
-];
+  const withDistance = rows.map((row, index) => ({
+    row,
+    index,
+    distance: forwardSlotDistance(currentSlot, row.slot),
+  }));
+
+  const activeIndex = withDistance.find((entry) => entry.distance === 0)?.index ?? -1;
+  if (activeIndex >= 0) {
+    return rows.map((_, index) => (index === activeIndex ? "active" : "default"));
+  }
+
+  const soonIndex = withDistance.find((entry) => entry.distance > 0 && entry.distance <= 1)?.index ?? -1;
+  if (soonIndex >= 0) {
+    return rows.map((_, index) => (index === soonIndex ? "soon" : "default"));
+  }
+
+  const plannedEntry = withDistance
+    .filter((entry) => entry.distance > 0 && isMeaningfulHomeAction(entry.row))
+    .sort((a, b) => a.distance - b.distance)[0]
+    ?? withDistance.find((entry) => isMeaningfulHomeAction(entry.row));
+
+  const plannedIndex = plannedEntry?.index ?? -1;
+  if (plannedIndex >= 0) {
+    return rows.map((_, index) => (index === plannedIndex ? "planned" : "default"));
+  }
+
+  return rows.map(() => "default");
+}
+
+export function mergeTimeline(
+  timeline: any[],
+  context: {
+    solarForecastKwh: number;
+    currentPence: number;
+    hasEV: boolean;
+  },
+  currentSlot: number,
+  slotOffset = 0
+): TimelineItem[] {
+  const normalized = timeline
+    .map((item) => ({
+      slot: (((Number(item.slot ?? 0) + slotOffset) % 48) + 48) % 48,
+      action: String(item.action ?? "hold"),
+      reason: String(item.reason ?? ""),
+    }))
+    .filter((item) => Number.isFinite(item.slot))
+    .sort((a, b) => a.slot - b.slot);
+
+  const segments: TimelineItem[] = [];
+  for (const item of normalized) {
+    const label = homeActionLabel({
+      action: item.action,
+      reason: item.reason,
+      hasEV: context.hasEV,
+    });
+    const reason = shortenReason(item.reason);
+    const pseudoType = item.action?.toLowerCase() === "export"
+      ? "export"
+      : item.action?.toLowerCase() === "charge"
+      ? context.hasEV
+        ? "ev_charge"
+        : "battery_charge"
+      : item.action?.toLowerCase() === "discharge"
+      ? "solar_use"
+      : "hold";
+
+    const start = slotToTime(item.slot);
+    const end = slotToTime((item.slot + 1) % 48);
+    const basePrice = Number(context.currentPence.toFixed(1));
+    const reasoning = buildDecisionExplanation(
+      {
+        type: pseudoType,
+        start,
+        end,
+        priceRange: `${Math.max(0.1, basePrice - 1.2).toFixed(1)}–${(basePrice + 1.8).toFixed(1)}p`,
+        priceMin: Math.max(0.1, basePrice - 1.2),
+        priceMax: basePrice + 1.8,
+        color: actionColor(item.action),
+        highlight: false,
+        slotCount: 1,
+      },
+      {
+        solarForecastKwh: context.solarForecastKwh,
+        evReadyBy: context.hasEV ? "07:00" : undefined,
+      },
+      {
+        cheapestPrice: Math.max(0.1, basePrice - 2.5),
+        peakPrice: basePrice + 12,
+        gridCondition: "Live grid conditions remain stable for this period.",
+      }
+    );
+
+    const last = segments[segments.length - 1];
+    if (last && last.label === label && last.reason === reason) continue;
+    segments.push({ slot: item.slot, action: item.action, label, reason, reasoning });
+  }
+
+  if (!segments.length) return [];
+
+  const isActiveAtSlot = (segmentIndex: number) => {
+    const start = segments[segmentIndex].slot;
+    const next = segments[segmentIndex + 1];
+    if (!next) return currentSlot >= start;
+    if (start === next.slot) return currentSlot === start;
+    return currentSlot >= start && currentSlot < next.slot;
+  };
+
+  const activeIndex = segments.findIndex((_, index) => isActiveAtSlot(index));
+  const futureByDistance = segments
+    .map((row, index) => ({
+      row,
+      index,
+      distance: row.slot - currentSlot,
+    }))
+    .filter((entry) => entry.distance > 0)
+    .sort((a, b) => a.distance - b.distance);
+
+  const chosen: TimelineItem[] = [];
+
+  if (activeIndex >= 0) {
+    chosen.push({ ...segments[activeIndex], liveLabel: "Now" });
+
+    const nextMeaningful = futureByDistance.find((entry) => isMeaningfulHomeAction(entry.row));
+    if (nextMeaningful) {
+      chosen.push({ ...nextMeaningful.row, liveLabel: "Up next" });
+    }
+    return chosen.slice(0, 2);
+  }
+
+  const meaningfulFuture = futureByDistance.filter((entry) => isMeaningfulHomeAction(entry.row));
+  const firstFuture = meaningfulFuture[0] ?? futureByDistance[0];
+  if (!firstFuture) return [];
+
+  chosen.push({ ...firstFuture.row, liveLabel: "Now" });
+
+  const secondMeaningful = meaningfulFuture.find((entry) => entry.index !== firstFuture.index);
+  if (secondMeaningful) {
+    chosen.push({ ...secondMeaningful.row, liveLabel: "Up next" });
+  }
+
+  return chosen.slice(0, 2);
+}
+
+function CollapsibleSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((value) => !value)}
+        style={{
+          width: "100%",
+          background: "none",
+          border: "none",
+          padding: "18px 20px",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 500, color: "#8994A6", letterSpacing: 0.15 }}>{label}</span>
+        {open ? <ChevronUp size={14} color="#445066" strokeWidth={2.2} /> : <ChevronDown size={14} color="#445066" strokeWidth={2.2} />}
+      </button>
+      {open && <div style={{ paddingBottom: 8 }}>{children}</div>}
+    </div>
+  );
+}
+
+function SystemHealthCard({
+  connectedDevices,
+  deviceHealth,
+}: {
+  connectedDevices: DeviceConfig[];
+  deviceHealth: Record<string, { ok: boolean; lastSeen: number }>;
+}) {
+  const followUpByDevice: Record<string, string> = {
+    ev: "Action needed only if you need EV charging immediately.",
+    battery: "Action needed only if you need a higher backup reserve right now.",
+    solar: "Action needed only if you are expecting live solar generation now.",
+    grid: "Action needed only if live tariff tracking stays unavailable.",
+  };
+
+  const alerts = connectedDevices
+    .map((device) => {
+      const health = deviceHealth[device.id];
+      if (!health || health.ok) return null;
+      const hrs = Math.floor(health.lastSeen / 60);
+      const mins = health.lastSeen % 60;
+      const ago = hrs > 0 ? `${hrs}h ${mins}m ago` : `${mins}m ago`;
+      return { device, ago };
+    })
+    .filter((value): value is { device: DeviceConfig; ago: string } => value !== null);
+
+  if (alerts.length === 0) return null;
+
+  return (
+    <div style={{ margin: "10px 16px 12px", background: "#111722", borderRadius: 16, border: "1px solid #2A3345", padding: "12px 14px" }}>
+      <div style={{ fontSize: 10, color: "#8FA1B9", fontWeight: 700, letterSpacing: 0.7, marginBottom: 8 }}>WHEN SOMETHING CHANGED</div>
+      <div style={{ display: "grid", gap: 8 }}>
+        {alerts.map(({ device, ago }) => (
+          <div key={device.id} style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 12, color: "#D3DCE8", fontWeight: 700, marginBottom: 2 }}>{device.name} offline</div>
+              <div style={{ fontSize: 11, color: "#8A9DB8", lineHeight: 1.4 }}>
+                Last seen {ago}. Gridly continues optimising safely with remaining systems. {followUpByDevice[device.id] ?? "No action needed unless you want immediate manual control."}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EnergyFlowSVG({
+  hasSolar,
+  hasBattery,
+  hasEV,
+  hasGrid,
+  solarW,
+  homeW,
+  batteryPct,
+  gridW,
+  isCharging,
+  isExporting,
+}: {
+  hasSolar: boolean;
+  hasBattery: boolean;
+  hasEV: boolean;
+  hasGrid: boolean;
+  solarW: number;
+  homeW: number;
+  batteryPct: number;
+  gridW: number;
+  isCharging: boolean;
+  isExporting: boolean;
+}) {
+  const HOME = { x: 160, y: 110 };
+  const SOLAR = { x: 160, y: 28 };
+  const BATT = { x: 270, y: 110 };
+  const EV = { x: 160, y: 192 };
+  const GRID = { x: 50, y: 110 };
+  const nodeRadius = 26;
+  const homeRadius = 30;
+
+  const solarOn = hasSolar && solarW > 100;
+  const batteryChargeOn = hasBattery && isCharging;
+  const batteryDischargeOn = hasBattery && !isCharging && batteryPct > 20;
+  const evOn = hasEV;
+  const gridImport = hasGrid && !isExporting;
+  const gridExport = hasGrid && isExporting;
+
+  const solarToHome = `M ${SOLAR.x},${SOLAR.y + nodeRadius + 2} L ${HOME.x},${HOME.y - homeRadius - 2}`;
+  const homeToBattery = `M ${HOME.x + homeRadius + 2},${HOME.y} L ${BATT.x - nodeRadius - 2},${BATT.y}`;
+  const batteryToHome = `M ${BATT.x - nodeRadius - 2},${BATT.y} L ${HOME.x + homeRadius + 2},${HOME.y}`;
+  const homeToEv = `M ${HOME.x},${HOME.y + homeRadius + 2} L ${EV.x},${EV.y - nodeRadius - 2}`;
+  const gridToHome = `M ${GRID.x + nodeRadius + 2},${GRID.y} L ${HOME.x - homeRadius - 2},${HOME.y}`;
+  const homeToGrid = `M ${HOME.x - homeRadius - 2},${HOME.y} L ${GRID.x + nodeRadius + 2},${GRID.y}`;
+
+  return (
+    <svg viewBox="0 0 320 220" style={{ width: "100%", maxHeight: 232 }}>
+      {hasSolar && <FlowConnector x1={SOLAR.x} y1={SOLAR.y + nodeRadius} x2={HOME.x} y2={HOME.y - homeRadius} active={solarOn} color={ENERGY_COLORS.solar} intensity="home" />}
+      {hasBattery && <FlowConnector x1={HOME.x + homeRadius} y1={HOME.y} x2={BATT.x - nodeRadius} y2={BATT.y} active={batteryChargeOn || batteryDischargeOn} color={ENERGY_COLORS.battery} intensity="home" />}
+      {hasEV && <FlowConnector x1={HOME.x} y1={HOME.y + homeRadius} x2={EV.x} y2={EV.y - nodeRadius} active={evOn} color={ENERGY_COLORS.ev} intensity="home" />}
+      {hasGrid && <FlowConnector x1={GRID.x + nodeRadius} y1={GRID.y} x2={HOME.x - homeRadius} y2={HOME.y} active={gridImport || gridExport} color={ENERGY_COLORS.grid} intensity="home" />}
+
+      {solarOn && <circle r="3" fill={ENERGY_COLORS.solar}><animateMotion dur="1.4s" repeatCount="indefinite" path={solarToHome} /></circle>}
+      {batteryChargeOn && <circle r="3" fill={ENERGY_COLORS.battery}><animateMotion dur="1.4s" repeatCount="indefinite" path={homeToBattery} /></circle>}
+      {batteryDischargeOn && !batteryChargeOn && <circle r="3" fill={ENERGY_COLORS.battery}><animateMotion dur="1.4s" repeatCount="indefinite" path={batteryToHome} /></circle>}
+      {evOn && <circle r="3" fill={ENERGY_COLORS.ev}><animateMotion dur="1.4s" repeatCount="indefinite" path={homeToEv} /></circle>}
+      {gridImport && <circle r="3" fill={ENERGY_COLORS.grid}><animateMotion dur="1.4s" repeatCount="indefinite" path={gridToHome} /></circle>}
+      {gridExport && <circle r="3" fill={ENERGY_COLORS.grid}><animateMotion dur="1.4s" repeatCount="indefinite" path={homeToGrid} /></circle>}
+
+      <circle cx={HOME.x} cy={HOME.y} r={homeRadius + 10} fill="none" stroke="#1A253514" strokeWidth="14" />
+      <circle cx={HOME.x} cy={HOME.y} r={homeRadius} fill="#0C1422" stroke="#1A2535" strokeWidth="1.5" />
+      <text x={HOME.x} y={HOME.y - 4} textAnchor="middle" fontSize="11" fontWeight="700" fill={ENERGY_COLORS.home} fontFamily="system-ui, -apple-system, sans-serif">{(homeW / 1000).toFixed(1)}kW</text>
+      <text x={HOME.x} y={HOME.y + 10} textAnchor="middle" fontSize="8" fill="#374151" fontFamily="system-ui, -apple-system, sans-serif" letterSpacing="0.6">HOME</text>
+
+      {hasSolar && (
+        <FlowNode
+          x={SOLAR.x}
+          y={SOLAR.y}
+          radius={nodeRadius}
+          active={solarOn}
+          color={ENERGY_COLORS.solar}
+          value={`${(solarW / 1000).toFixed(1)}kW`}
+          label="SOLAR"
+        />
+      )}
+
+      {hasBattery && (
+        <FlowNode
+          x={BATT.x}
+          y={BATT.y}
+          radius={nodeRadius}
+          active={batteryChargeOn}
+          color={ENERGY_COLORS.battery}
+          value={`${batteryPct}%`}
+          valueActiveColor={ENERGY_COLORS.battery}
+          valueInactiveColor="#D1D5DB"
+          label="BATT"
+        />
+      )}
+
+      {hasEV && (
+        <FlowNode
+          x={EV.x}
+          y={EV.y}
+          radius={nodeRadius}
+          active={evOn}
+          color={ENERGY_COLORS.ev}
+          value="38%"
+          valueFontSize={10}
+          valueActiveColor={ENERGY_COLORS.ev}
+          valueInactiveColor={ENERGY_COLORS.ev}
+          label="EV"
+        />
+      )}
+
+      {hasGrid && (
+        <>
+          <FlowNode
+            x={GRID.x}
+            y={GRID.y}
+            radius={nodeRadius}
+            active={true}
+            color={ENERGY_COLORS.grid}
+            value={`${Math.abs(gridW / 1000).toFixed(1)}kW`}
+            valueFontSize={9}
+            valueActiveColor={ENERGY_COLORS.grid}
+            valueInactiveColor={ENERGY_COLORS.grid}
+            label=""
+            labelLetterSpacing="0"
+            showHalo={false}
+          />
+          <text x={GRID.x} y={GRID.y + 10} textAnchor="middle" fontSize="7" fill="#374151" fontFamily="system-ui, -apple-system, sans-serif" letterSpacing="0.4">{gridExport ? "PEAK PERIOD" : "IMPORT"}</text>
+        </>
+      )}
+    </svg>
+  );
+}
+
+function DeviceRow({ device }: { device: DeviceConfig }) {
+  const Icon = device.icon;
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 20px", borderBottom: "1px solid #0A1020" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ width: 34, height: 34, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", background: `${device.color}10`, border: `1px solid ${device.color}22` }}>
+          <Icon size={15} color={device.color} />
+        </div>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#D1D5DB" }}>{device.name}</div>
+          <div style={{ fontSize: 11, color: "#4B5563", marginTop: 1 }}>{device.status}</div>
+        </div>
+      </div>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#22C55E" }}>+£{device.monthlyValue}/mo</div>
+    </div>
+  );
+}
 
 export default function HomeTab({ connectedDevices, now }: { connectedDevices: DeviceConfig[]; now: Date }) {
-  const [optimisationGoal, setOptimisationGoal] = useState<OptimisationGoal>("MAX_SAVINGS");
-  const [minBatteryReserve, setMinBatteryReserve] = useState(20);
-  const [copilotStatus, setCopilotStatus] = useState("No manual action taken yet.");
-  const [showControls, setShowControls] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
-  const [showMore, setShowMore] = useState(false);
-  const [showAllTime, setShowAllTime] = useState(false);
-  const [showConnected, setShowConnected] = useState(false);
-  const hour = now.getHours();
-  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-  const slotIndex = getCurrentSlotIndex();
+  const hasBattery = connectedDevices.some((device) => device.id === "battery");
+  const hasEV = connectedDevices.some((device) => device.id === "ev");
+  const hasSolar = connectedDevices.some((device) => device.id === "solar");
+  const hasGrid = connectedDevices.some((device) => device.id === "grid");
+
+  const simulatedDeviceHealth = useMemo(
+    () => buildLiveDeviceHealth(now, SANDBOX.deviceHealth as Record<string, { ok: boolean; lastSeen: number }>),
+    [now]
+  );
+
+  const simulatedSolar = useMemo(
+    () => buildLiveSolarState(now, SANDBOX.solar, { hasSolar, hasBattery, hasGrid }),
+    [now, hasSolar, hasBattery, hasGrid]
+  );
+
+  const deviceHealth = ENABLE_HOME_SIMULATION
+    ? simulatedDeviceHealth
+    : (SANDBOX.deviceHealth as Record<string, { ok: boolean; lastSeen: number }>);
+
+  const s = ENABLE_HOME_SIMULATION ? simulatedSolar : SANDBOX.solar;
+
+  const slotIndex = Math.min(Math.floor((now.getHours() * 60 + now.getMinutes()) / 30), 47);
   const currentPence = AGILE_RATES[slotIndex].pence;
-  const best = getBestChargeSlot();
-  const s = SANDBOX.solar;
-
-  const hasBattery = connectedDevices.some(d => d.id === "battery");
-  const hasEV = connectedDevices.some(d => d.id === "ev");
-  const hasSolar = connectedDevices.some(d => d.id === "solar");
-  const hasGrid = connectedDevices.some(d => d.id === "grid");
-
-  const evState = {
-    connected: hasEV,
-    pct: 38,
-    targetPct: 80,
-    readyByHour: 7,
-  };
 
   const engineInput = {
     batterySocPercent: s.batteryPct,
@@ -206,58 +659,45 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
     exportPrice: Array.from({ length: 8 }, (_, i) => Math.max(0.05, (currentPence + i * 0.015) / 100)),
   };
 
-const engineOutput = optimizePlan(engineInput);
-const rawTimeline = engineOutput.timeline || [];
-const cleanedTimeline = mergeConsecutiveTimeline(rawTimeline).slice(0, 4);
-const homeView = mapEngineToHome(engineOutput);
-const explanation = explainPlan(engineOutput);
-const primaryRecommendation = engineOutput.recommendations[0];
+  const engineOutput = optimizePlan(engineInput);
+  const timeline = mergeTimeline(engineOutput.timeline || [], {
+    solarForecastKwh: SANDBOX?.solarForecast?.kwh ?? 0,
+    currentPence,
+    hasEV,
+  }, slotIndex, slotIndex);
+  const homeView = mapEngineToHome(engineOutput);
+  const explanation = explainPlan(engineOutput);
+  const [selectedTimelineItem, setSelectedTimelineItem] = useState<TimelineItem | null>(null);
+  const primaryRecommendation = engineOutput.recommendations[0];
+  const isCharging = primaryRecommendation?.action === "charge";
+  const isExporting = primaryRecommendation?.action === "export";
 
-// Derived UI state
-const heroHeadlineText = (homeView.headline ?? actionToLabel(primaryRecommendation?.action) ?? "").toLowerCase().trim();
-
-const heroColor =
-  heroHeadlineText.includes("charging") || heroHeadlineText.includes("charge")
-    ? "#22C55E"
-    : heroHeadlineText.includes("export")
-    ? "#059669"
-    : heroHeadlineText.includes("holding") || heroHeadlineText.includes("hold")
-    ? "#9CA3AF"
-    : actionToColor(primaryRecommendation?.action);
-
-const heroAction = primaryRecommendation?.action?.toLowerCase().trim();
-
-const cfg = {
-  color: heroColor,
-  border: `${heroColor}40`,
-  bg: "#111827",
-  icon:
-    heroAction === "charge" || heroAction === "charging"
-      ? "⚡"
-      : heroAction === "export" || heroAction === "exporting"
-      ? "↗"
-      : "⏸",
-  label: homeView.headline ?? actionToLabel(primaryRecommendation?.action),
-};
-const isCharging = primaryRecommendation?.action === "charge";
-const isExporting = primaryRecommendation?.action === "export";
-
-const heroViewModel = {
-  title: cfg.label,
-  subtitle: homeView.subheadline ?? explanation.shortReason ?? "Gridly is evaluating the best time to act.",
-  icon: cfg.icon,
-  color: cfg.color,
-  border: cfg.border,
-  bg: cfg.bg,
-  savingsText: homeView.savings !== undefined ? `Saving est. £${homeView.savings.toFixed(2)}` : undefined,
-  confidenceText: explanation.confidenceLabel,
-  plannedActionsText: `${homeView.actionCount} planned actions`,
-};
-
-const timelineViewModel = {
-  rows: cleanedTimeline,
-  currentSlot: slotIndex,
-};
+  const heroColor = isCharging ? "#22C55E" : isExporting ? "#F59E0B" : "#6B7280";
+  const heroLabel = conciseHeroHeadline();
+  const heroReason = buildHeroDecisionReason({
+    action: primaryRecommendation?.action,
+    reason: homeView.subheadline ?? explanation.shortReason,
+    currentPence,
+  });
+  const hasDeviceAlerts = connectedDevices.some((device) => {
+    const health = deviceHealth[device.id];
+    return health && !health.ok;
+  });
+  const homeReassuranceNote = buildHomeReassuranceNote({
+    hasEV,
+    hasBattery,
+    hasSolar,
+    solarForecastKwh: SANDBOX?.solarForecast?.kwh ?? 0,
+    batteryPct: s.batteryPct,
+    slotIndex,
+  });
+  const flowInterpretation = buildFlowInterpretation({
+    hasSolar,
+    hasBattery,
+    hasEV,
+    isCharging,
+    isExporting,
+  });
 
   const planner = useMemo(() => {
     const pricesPence = AGILE_RATES.map((rate) => rate.pence);
@@ -267,11 +707,7 @@ const timelineViewModel = {
       if (hour >= 6 && hour <= 8) return 0.75;
       return 0.55;
     });
-    const solarKwh = AGILE_RATES.map((_, i) => {
-      const hour = i / 2;
-      const daylightShape = Math.max(0, 1 - Math.abs(hour - 13) / 5);
-      return Number((daylightShape * 0.8).toFixed(2));
-    });
+    const solarKwh = AGILE_RATES.map((_, i) => Number((Math.max(0, 1 - Math.abs(i / 2 - 13) / 5) * 0.8).toFixed(2)));
 
     return buildDayPlan({
       pricesPence,
@@ -280,480 +716,191 @@ const timelineViewModel = {
       currentSlot: slotIndex,
       batteryCapacityKwh: 13.5,
       socStartKwh: (s.batteryPct / 100) * 13.5,
-      minReserveKwh: (minBatteryReserve / 100) * 13.5,
+      minReserveKwh: 0.2 * 13.5,
       maxChargePerSlotKwh: 2.7,
       maxDischargePerSlotKwh: 2.7,
       chargeEfficiency: 0.92,
       dischargeEfficiency: 0.92,
       exportEnabled: hasGrid,
     });
-  }, [slotIndex, s.batteryPct, minBatteryReserve, hasGrid]);
+  }, [slotIndex, s.batteryPct, hasGrid]);
 
-  const recommendation = buildAiRecommendation({
-    mode: primaryRecommendation?.action === "charge"
-      ? "CHARGE"
-      : primaryRecommendation?.action === "export"
-      ? "EXPORT"
-      :"HOLD",
-    currentPence,
-    bestSlotPence: best.price,
-    hasBattery,
-    hasGrid,
-    hasEV,
-    optimisationGoal,
-    projectedDayPlanSavings: Math.max(0, planner.projectedSavingsPounds),
-  });
-
-  const briefViewModel = {
-    title: recommendation.title,
-    reason: recommendation.reason,
-    confidence: recommendation.confidence,
-    expectedSavings: Math.max(0, planner.projectedSavingsPounds).toFixed(2),
-    status: copilotStatus,
-  };
-
-  const renderRightNowCard = (heroVM: HeroViewModel) => (
-    <div style={{ margin: "0 20px 20px", background: heroVM.bg, border: `1px solid ${heroVM.border}`, borderRadius: 16, padding: "16px 20px" }}>
-      <div style={{ fontSize: 10, color: heroVM.color, fontWeight: 700, letterSpacing: 1.5, marginBottom: 8 }}>RIGHT NOW</div>
-      <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: -0.5, marginBottom: 4, lineHeight: 1.2 }}>
-        <span style={{ color: heroVM.color, marginLeft: 16 }}>
-          {heroVM.icon} {heroVM.title}
-        </span>
-      </div>
-      <div style={{ fontSize: 13, color: "#9CA3AF", lineHeight: 1.5 }}>
-        <>
-          {heroVM.subtitle}
-          <div style={{ display: "flex", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
-            {heroVM.savingsText && (
-              <span style={{ fontSize: 11, color: "#22C55E", fontWeight: 700 }}>
-                {heroVM.savingsText}
-              </span>
-            )}
-            {heroVM.confidenceText && (
-              <span style={{ fontSize: 11, color: "#9CA3AF" }}>
-                {heroVM.confidenceText}
-              </span>
-            )}
-            <span style={{ fontSize: 11, color: "#6B7280" }}>
-              {heroVM.plannedActionsText}
-            </span>
-          </div>
-        </>
-      </div>
-    </div>
-  );
-
-  const renderTimelineCard = (timelineVM: TimelineViewModel) => (
-    <div style={{ margin: "0 20px 20px", background: "#111827", border: "1px solid #1F2937", borderRadius: 16, padding: "16px 20px" }}>
-      <div style={{ fontSize: 10, color: "#93C5FD", fontWeight: 700, letterSpacing: 1.5, marginBottom: 12 }}>WHAT GRIDLY WILL DO NEXT</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {timelineVM.rows.map((item, index) => (
-          <div
-            key={`${item.slot}-${index}`}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              ...(item.slot === timelineVM.currentSlot
-                ? {
-                    background: "rgba(31, 41, 55, 0.7)",
-                    borderRadius: 8,
-                    padding: "6px 10px",
-                    margin: "-6px -10px",
-                  }
-                : {}),
-            }}
-          >
-            <div style={{ fontSize: 11, color: "#6B7280", minWidth: 40, fontVariantNumeric: "tabular-nums" }}>
-              {slotToTimeLabel(item.slot)}
-              {item.slot === timelineVM.currentSlot && <span style={{ fontSize: 9, color: "#93C5FD", marginLeft: 4 }}>NOW</span>}
-            </div>
-            <div style={{ fontSize: 12, color: actionToColor(item.action), fontWeight: 700, minWidth: 76 }}>
-              <span style={{ marginRight: 6 }}>{actionToIcon(item.action)}</span>
-              {item.friendlyAction}
-            </div>
-            <div style={{ fontSize: 11, color: "#9CA3AF", flex: 1 }}>{item.shortReason}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-
-  const renderGridlyBriefCard = (props: BriefProps) => (
-    <div style={{ margin: "0 20px 20px", background: "#0E1726", border: "1px solid #374151", borderRadius: 16, padding: "12px 14px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div style={{ fontSize: 10, color: "#93C5FD", fontWeight: 700, letterSpacing: 1.2 }}>GRIDLY BRIEF</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button
-            onClick={() => props.setShowHelp(!props.showHelp)}
-            style={{ background: "none", border: "none", color: "#93C5FD", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
-          >
-            {showHelp ? "Close help" : "Help"}
-          </button>
-          <button
-            onClick={() => props.setShowControls(!props.showControls)}
-            style={{ background: "none", border: "none", color: "#60A5FA", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
-          >
-            {showControls ? "Done" : "Optimise for"}
-          </button>
-        </div>
-      </div>
-
-      {props.showHelp && (
-        <div style={{ marginBottom: 10, background: "#0F172A", border: "1px solid #1E293B", borderRadius: 10, padding: "10px 12px" }}>
-          <div style={{ fontSize: 12, color: "#E2E8F0", fontWeight: 700, marginBottom: 6 }}>How this works</div>
-          <div style={{ fontSize: 11, color: "#94A3B8", lineHeight: 1.5 }}>
-             Gridly watches price and your devices, then suggests one best move right now. Use <span style={{ color: "#E2E8F0" }}>Do it now</span> to accept or <span style={{ color: "#E2E8F0" }}>Not now</span> to skip. Tap <span style={{ color: "#E2E8F0" }}>Tune</span> only if you want to change your goal or reserve level. <span style={{ color: "#E2E8F0" }}>AI confidence</span> tells you how strong today&apos;s signal is for this action, and <span style={{ color: "#E2E8F0" }}>Trust</span> reflects how consistently this recommendation pattern has worked for you over time.
-          </div>
-        </div>
-      )}
-
-      <div style={{ fontSize: 18, fontWeight: 800, color: "#F9FAFB", marginBottom: 4 }}>{props.viewModel.title}</div>
-      <div style={{ fontSize: 13, color: "#64748B", marginBottom: 8 }}>
-        {props.viewModel.reason} · AI confidence: {props.viewModel.confidence}% · Expected savings: £{props.viewModel.expectedSavings}
-      </div>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        <button
-          onClick={() => {
-            recordAiFeedback("accepted");
-            setCopilotStatus(`Applied: ${props.viewModel.title}`);
-          }}
-          style={{ background: "#16A34A20", border: "1px solid #16A34A50", color: "#86EFAC", borderRadius: 10, padding: "8px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
-        >
-          Do it now
-        </button>
-        <button
-          onClick={() => {
-            recordAiFeedback("skipped");
-            setCopilotStatus(`Skipped: ${props.viewModel.title}`);
-          }}
-          style={{ background: "#0F172A", border: "1px solid #334155", color: "#94A3B8", borderRadius: 10, padding: "8px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
-        >
-          Not now
-        </button>
-      </div>
-      <div style={{ fontSize: 11, color: "#64748B" }}>{props.viewModel.status}</div>
-
-      {props.showControls && (
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #1E293B", display: "grid", gap: 8 }}>
-          <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 700, marginBottom: 6 }}>Optimise for</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <button
-              onClick={() => props.setOptimisationGoal("MAX_SAVINGS")}
-              style={{
-                background: props.optimisationGoal === "MAX_SAVINGS" ? "#60A5FA" : "#0F172A",
-                color: props.optimisationGoal === "MAX_SAVINGS" ? "#FFFFFF" : "#94A3B8",
-                border: "1px solid #334155",
-                borderRadius: 20,
-                padding: "6px 12px",
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: "pointer",
-                fontFamily: "inherit"
-              }}
-            >
-              Save more
-            </button>
-            <button
-              onClick={() => props.setOptimisationGoal("LOWEST_CARBON")}
-              style={{
-                background: props.optimisationGoal === "LOWEST_CARBON" ? "#60A5FA" : "#0F172A",
-                color: props.optimisationGoal === "LOWEST_CARBON" ? "#FFFFFF" : "#94A3B8",
-                border: "1px solid #334155",
-                borderRadius: 20,
-                padding: "6px 12px",
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: "pointer",
-                fontFamily: "inherit"
-              }}
-            >
-              Greener
-            </button>
-            <button
-              onClick={() => props.setOptimisationGoal("BATTERY_CARE")}
-              style={{
-                background: props.optimisationGoal === "BATTERY_CARE" ? "#60A5FA" : "#0F172A",
-                color: props.optimisationGoal === "BATTERY_CARE" ? "#FFFFFF" : "#94A3B8",
-                border: "1px solid #334155",
-                borderRadius: 20,
-                padding: "6px 12px",
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: "pointer",
-                fontFamily: "inherit"
-              }}
-            >
-              Protect battery
-            </button>
-            <button
-              onClick={() => props.setOptimisationGoal("EV_READY")}
-              style={{
-                background: props.optimisationGoal === "EV_READY" ? "#60A5FA" : "#0F172A",
-                color: props.optimisationGoal === "EV_READY" ? "#FFFFFF" : "#94A3B8",
-                border: "1px solid #334155",
-                borderRadius: 20,
-                padding: "6px 12px",
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: "pointer",
-                fontFamily: "inherit"
-              }}
-            >
-              EV ready
-            </button>
-          </div>
-          <div style={{ fontSize: 11, color: "#64748B", lineHeight: 1.4 }}>
-            {props.optimisationGoal === "MAX_SAVINGS" && "Gridly will favour cheaper charging windows and strong export value."}
-            {props.optimisationGoal === "LOWEST_CARBON" && "Gridly will shift usage into cleaner grid periods where possible."}
-            {props.optimisationGoal === "BATTERY_CARE" && "Gridly will reduce deep cycling and preserve reserve."}
-            {props.optimisationGoal === "EV_READY" && "Gridly will prioritise reaching your ready-by target."}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-            <div style={{ fontSize: 11, color: "#94A3B8" }}>Reserve {props.minBatteryReserve}%</div>
-            <input
-              type="range"
-              min={10}
-              max={50}
-              step={5}
-              value={props.minBatteryReserve}
-              onChange={(event) => props.setMinBatteryReserve(Number(event.target.value))}
-              style={{ width: 140 }}
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  const renderLiveEnergyFlowCard = () => (
-    <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "20px" }}>
-      <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 8 }}>
-        LIVE ENERGY FLOW
-      </div>
-      <div style={{ fontSize: 11, color: "#9CA3AF", lineHeight: 1.5, marginBottom: 16 }}>
-        A real-time map of where power is moving across home, solar, battery, EV, and grid.
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-
-        {connectedDevices.some(d => d.id === "solar") && (
-          <>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ width: 52, height: 52, background: "#F59E0B15", border: "1.5px solid #F59E0B30", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", boxShadow: s.w > 0 ? "0 0 12px rgba(245, 158, 11, 0.4)" : "none" }}>
-                <Sun size={22} color="#F59E0B" />
-              </div>
-              <div style={{ fontSize: 13, fontWeight: 800, color: "#F9FAFB" }}>
-                {(s.w / 1000).toFixed(1)}kW
-              </div>
-              <div style={{ fontSize: 10, color: "#6B7280" }}>Solar</div>
-            </div>
-
-            <FlowDot active={s.w > 0} color="#F59E0B" />
-          </>
-        )}
-
-        <div style={{ textAlign: "center" }}>
-          <div style={{ width: 52, height: 52, background: "#ffffff10", border: "1.5px solid #ffffff20", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
-            <Home size={22} color="#E5E7EB" />
-          </div>
-          <div style={{ fontSize: 13, fontWeight: 800, color: "#F9FAFB" }}>
-            {(s.homeW / 1000).toFixed(1)}kW
-          </div>
-          <div style={{ fontSize: 10, color: "#6B7280" }}>Home</div>
-        </div>
-
-        {connectedDevices.some(d => d.id === "battery") && (
-          <>
-            <FlowDot active={isCharging} color="#16A34A" />
-
-            <div style={{ textAlign: "center" }}>
-              <div style={{ width: 52, height: 52, background: "#16A34A15", border: "1.5px solid #16A34A30", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", boxShadow: isCharging ? "0 0 12px rgba(34, 197, 94, 0.4)" : "none" }}>
-                <Battery size={22} color="#22C55E" />
-              </div>
-              <div style={{ fontSize: 13, fontWeight: 800, color: "#F9FAFB" }}>
-                {s.batteryPct}%
-              </div>
-              <div style={{ fontSize: 10, color: "#6B7280" }}>Battery</div>
-            </div>
-          </>
-        )}
-
-        {connectedDevices.some(d => d.id === "ev") && (
-          <>
-            <FlowDot active={isCharging} color="#38BDF8" />
-
-            <div style={{ textAlign: "center" }}>
-              <div style={{ width: 52, height: 52, background: "#38BDF815", border: "1.5px solid #38BDF830", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", boxShadow: isCharging ? "0 0 12px rgba(56, 189, 248, 0.4)" : "none" }}>
-                <Zap size={22} color="#38BDF8" />
-              </div>
-              <div style={{ fontSize: 13, fontWeight: 800, color: "#38BDF8" }}>
-                Charging
-              </div>
-              <div style={{ fontSize: 10, color: "#6B7280" }}>EV</div>
-            </div>
-          </>
-        )}
-
-        {connectedDevices.some(d => d.id === "grid") && (
-          <>
-            <FlowDot active={isExporting} color="#F59E0B" />
-
-            <div style={{ textAlign: "center" }}>
-              <div style={{ width: 52, height: 52, background: isExporting ? "#F59E0B15" : "#ffffff05", border: `1.5px solid ${isExporting ? "#F59E0B30" : "#ffffff10"}`, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px", boxShadow: isExporting ? "0 0 12px rgba(245, 158, 11, 0.4)" : "none" }}>
-                <TrendingUp size={22} color={isExporting ? "#F59E0B" : "#374151"} />
-              </div>
-
-              <div style={{ fontSize: 13, fontWeight: 800, color: isExporting ? "#F59E0B" : "#374151" }}>
-                {isExporting ? `${(s.gridW / 1000).toFixed(1)}kW` : "—"}
-              </div>
-
-              <div style={{ fontSize: 10, color: "#6B7280" }}>
-                {isExporting ? "Exporting" : "Grid"}
-              </div>
-            </div>
-          </>
-        )}
-
-      </div>
-    </div>
-  );
-
-  const renderInsightsSection = () => (
-    <>
-      {/* Carbon tracker */}
-      <CarbonTracker connectedDevices={connectedDevices} />
-
-      {/* All-time counter */}
-      <div style={{ margin: "0 20px 12px", background: "linear-gradient(135deg, #0a0a0a, #111827)", border: "1px solid #374151", borderRadius: 20, padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div onClick={() => setShowAllTime(!showAllTime)} style={{ fontSize: 10, color: "#6B7280", letterSpacing: 1, fontWeight: 700, marginBottom: 6, cursor: "pointer" }}>
-            ALL TIME {showAllTime ? '▼' : '▶'}
-          </div>
-          {showAllTime && (
-            <>
-              <div style={{ fontSize: 40, fontWeight: 900, color: "#22C55E", letterSpacing: -2, lineHeight: 1 }}>+£{SANDBOX.allTime}</div>
-              <div style={{ fontSize: 11, color: "#4B5563", marginTop: 6 }}>since {SANDBOX.allTimeSince}</div>
-            </>
-          )}
-        </div>
-        {showAllTime && (
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 11, color: "#4B5563", marginBottom: 4 }}>Today</div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: "#22C55E" }}>+£{SANDBOX.savedToday}</div>
-            <div style={{ fontSize: 11, color: "#F59E0B", marginTop: 2 }}>£{SANDBOX.earnedToday} exported</div>
-          </div>
-        )}
-      </div>
-
-      {/* Nightly report card */}
-      <NightlyReportCard />
-
-      {/* Manual override */}
-      {/* Boost button — prominent single-tap charge */}
-      <BoostButton connectedDevices={connectedDevices} currentPence={currentPence} />
-
-      {/* Charger lock */}
-      <ChargerLock connectedDevices={connectedDevices} />
-
-      <ManualOverride currentPence={currentPence} connectedDevices={connectedDevices} />
-
-      {/* EV Ready-by */}
-      {hasEV && <EVReadyBy />}
-
-      {/* Battery reserve */}
-      {hasBattery && <BatteryReserve />}
-
-      {/* Solar forecast */}
-      {hasSolar && <SolarForecastCard />}
-
-      {/* Cross-device coordination — battery + EV joint plan */}
-      <CrossDeviceCoordination connectedDevices={connectedDevices} currentPence={currentPence} />
-
-      {/* Battery health — only if battery connected */}
-      {hasBattery && <BatteryHealthScore />}
-
-      {/* Tariff switcher */}
-      <TariffSwitcher connectedDevices={connectedDevices} />
-
-      {/* Connected devices */}
-      <div style={{ margin: "0 20px 12px" }}>
-        <div onClick={() => setShowConnected(!showConnected)} style={{ fontSize: 9, color: "#6B7280", fontWeight: 700, letterSpacing: 1, marginBottom: 10, cursor: "pointer" }}>
-          CONNECTED {showConnected ? '▼' : '▶'}
-        </div>
-        {showConnected && (
-          <>
-            <div style={{ display: "grid", gap: 8 }}>
-              {connectedDevices.map(device => {
-                const Icon = device.icon;
-                return (
-                  <div key={device.id} style={{ background: "#111827", borderRadius: 12, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px solid #374151" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      <Icon size={16} color={device.color} />
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: "#F9FAFB" }}>{device.name}</div>
-                        <div style={{ fontSize: 11, color: "#4B5563" }}>{device.status}</div>
-                      </div>
-                    </div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: device.color }}>+£{device.monthlyValue}/mo</div>
-                  </div>
-                );
-              })}
-            </div>
-            <button onClick={() => window.location.href = '/onboarding'} style={{ width: "100%", marginTop: 10, background: "none", border: "1px dashed #374151", borderRadius: 12, padding: "12px 16px", color: "#4B3", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-              + Add another device
-            </button>
-          </>
-        )}
-      </div>
-    </>
-  );
+  void planner;
 
   return (
-    <div>
-      <div style={{ padding: "44px 24px 20px" }}>
-        <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: -0.8, marginBottom: 2 }}>{greeting}</div>
-        <div style={{ fontSize: 13, color: "#6B7280" }}>
-          {now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}
+    <div style={{ background: "#060A12", minHeight: "100vh", paddingBottom: 40 }}>
+      <div style={{ margin: "18px 16px 0", background: "#0A111D", borderRadius: 20, border: "1px solid #182235", overflow: "hidden", boxShadow: "0 18px 42px rgba(1, 7, 20, 0.35)" }}>
+        <div style={{ height: 2, background: `linear-gradient(90deg, ${heroColor}, ${heroColor}30)` }} />
+        <div style={{ padding: "20px 20px 20px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: heroColor, boxShadow: `0 0 8px ${heroColor}, 0 0 16px ${heroColor}50` }} />
+            <span style={{ fontSize: 11, color: "#4B5563", fontWeight: 600, letterSpacing: 0.8 }}>QUIETLY IN CONTROL</span>
+            <span style={{ fontSize: 10, color: "#7B8EA8", marginLeft: "auto", border: "1px solid #1D2B40", borderRadius: 999, padding: "2px 8px" }}>
+              {hasDeviceAlerts ? "Confidence: Reduced" : "Confidence: High"}
+            </span>
+          </div>
+
+          <div style={{ fontSize: 34, fontWeight: 850, color: "#F3F7FF", letterSpacing: -1.2, lineHeight: 1.05, marginBottom: 8 }}>{heroLabel}</div>
+
+          <div style={{ fontSize: 12, color: "#72829A", lineHeight: 1.4, marginBottom: 14 }}>{heroReason}</div>
+
+          <div style={{ display: "flex", gap: 18, borderTop: "1px solid #162235", paddingTop: 12 }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#506077", fontWeight: 600, letterSpacing: 0.6, marginBottom: 3 }}>SAVED BY GRIDLY TODAY</div>
+              <div style={{ fontSize: 19, fontWeight: 800, color: "#22C55E", letterSpacing: -0.5 }}>+£{SANDBOX.savedToday}</div>
+            </div>
+            {SANDBOX.earnedToday > 0 && (
+              <div>
+                <div style={{ fontSize: 10, color: "#506077", fontWeight: 600, letterSpacing: 0.6, marginBottom: 3 }}>EARNED BY GRIDLY TODAY</div>
+                <div style={{ fontSize: 19, fontWeight: 800, color: "#F59E0B", letterSpacing: -0.5 }}>+£{SANDBOX.earnedToday}</div>
+              </div>
+            )}
+            <div style={{ marginLeft: "auto" }}>
+              <div style={{ fontSize: 10, color: "#506077", fontWeight: 600, letterSpacing: 0.6, marginBottom: 3 }}>LIVE RATE</div>
+              <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: -0.5, color: currentPence < 15 ? "#22C55E" : currentPence < 25 ? "#F59E0B" : "#EF4444" }}>{currentPence.toFixed(1)}p</div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Device health alerts — top priority */}
-      <DeviceHealthAlerts connectedDevices={connectedDevices} />
-
-      {/* Mode card — hero, first thing user sees */}
-      {renderRightNowCard(heroViewModel)}
-
-      {/* What Gridly will do next timeline */}
-      {renderTimelineCard(timelineViewModel)}
-
-      {renderGridlyBriefCard({ viewModel: briefViewModel, showHelp, showControls, optimisationGoal, minBatteryReserve, setShowHelp, setShowControls, setOptimisationGoal, setMinBatteryReserve })}
-
-      {/* Energy flow — only connected devices */}
-      {renderLiveEnergyFlowCard()}
-
-      <div style={{ margin: "0 20px 16px", textAlign: "center" }}>
-        <button
-          onClick={() => setShowMore(!showMore)}
-          style={{
-            background: "#0E1726",
-            border: "1px solid #1E293B",
-            color: "#93C5FD",
-            borderRadius: 10,
-            padding: "8px 16px",
-            fontSize: 12,
-            fontWeight: 700,
-            cursor: "pointer",
-            fontFamily: "inherit"
-          }}
-        >
-          {showMore ? "Hide insights" : "Show more insights"}
-        </button>
+      <div style={{ margin: "10px 16px 0", background: "#09101A", borderRadius: 22, border: "1px solid #172236", padding: "18px 20px 10px", boxShadow: "0 26px 48px rgba(1, 7, 20, 0.38)" }}>
+        <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.2, marginBottom: 2 }}>ENERGY FLOW</div>
+        <EnergyFlowSVG
+          hasSolar={hasSolar}
+          hasBattery={hasBattery}
+          hasEV={hasEV}
+          hasGrid={hasGrid}
+          solarW={s.w}
+          homeW={s.homeW}
+          batteryPct={s.batteryPct}
+          gridW={s.gridW}
+          isCharging={isCharging}
+          isExporting={isExporting}
+        />
+        <div style={{ fontSize: 11, color: "#71839C", lineHeight: 1.45, paddingBottom: 8 }}>{flowInterpretation}</div>
       </div>
 
-      {showMore && renderInsightsSection()}
+      {timeline.length > 0 && (
+        <div style={{ margin: "14px 16px 0", background: "#0B1120", borderRadius: 20, border: "1px solid #152238", padding: "14px 20px" }}>
+          <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.05, marginBottom: 12 }}>NEXT</div>
+          {(() => {
+            const emphasisByIndex = deriveHomeTimelineEmphasis(timeline, slotIndex);
+            return timeline.map((item, index) => {
+              const tokenState = emphasisByIndex[index] ?? "default";
+              const token = TIMELINE_EMPHASIS_TOKENS[tokenState];
+              const dot = actionColor(item.action);
+              const statusLabel = item.liveLabel ?? (index === 0 ? "Now" : "Up next");
+              const dotGlow = timelineDotGlow(tokenState, dot, index === 0);
 
-    </div> 
+              return (
+                <button
+                  type="button"
+                  onClick={() => setSelectedTimelineItem(item)}
+                  key={`${item.slot}-${index}`}
+                  data-emphasis={tokenState}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    paddingTop: 8,
+                    paddingLeft: 8,
+                    paddingRight: 8,
+                    paddingBottom: 12,
+                    marginBottom: index < timeline.length - 1 ? 12 : 0,
+                    borderBottom: index < timeline.length - 1 ? "1px solid #111A2B" : "none",
+                    borderRadius: 10,
+                    background: token.background,
+                    boxShadow: token.boxShadow,
+                    borderLeft: token.borderLeft,
+                    borderTop: "none",
+                    borderRight: "none",
+                    width: "100%",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    textAlign: "left",
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: "#64738A", minWidth: 44, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{slotToTime(item.slot)}</div>
+                  <div
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: "50%",
+                      flexShrink: 0,
+                      background: dot,
+                      boxShadow: dotGlow,
+                    }}
+                  />
+                  <div
+                    style={{
+                      fontSize: 12.5,
+                      flex: 1,
+                      fontWeight: token.fontWeight,
+                      color: token.textColor,
+                    }}
+                  >
+                    {item.label}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#68788F", textAlign: "right", width: 76, fontVariantNumeric: "tabular-nums" }}>
+                    {statusLabel}
+                  </div>
+                </button>
+              );
+            });
+          })()}
+        </div>
+      )}
+
+      <div style={{ margin: "12px 16px 0", background: "#0A1220", borderRadius: 16, border: "1px solid #18263D", padding: "11px 14px" }}>
+        <div style={{ fontSize: 10, color: "#7B8EA8", fontWeight: 700, letterSpacing: 0.75, marginBottom: 4 }}>SYSTEM CONFIDENCE</div>
+        <div style={{ fontSize: 12, color: "#A5B4C7", lineHeight: 1.45 }}>{homeReassuranceNote}</div>
+      </div>
+
+      <SystemHealthCard connectedDevices={connectedDevices} deviceHealth={deviceHealth} />
+
+      <DecisionExplanationSheet
+        open={Boolean(selectedTimelineItem)}
+        title="Why Gridly chose this"
+        subtitle={selectedTimelineItem ? `${selectedTimelineItem.label} · ${selectedTimelineItem.reason || "Gridly action"}` : undefined}
+        reasoning={selectedTimelineItem?.reasoning ?? []}
+        onClose={() => setSelectedTimelineItem(null)}
+      />
+
+      <div style={{ margin: "24px 0 0" }}>
+        <div style={{ borderTop: "1px solid #0A1020" }}>
+          <CollapsibleSection label="Insights">
+            <NightlyReportCard />
+            {hasSolar && <SolarForecastCard />}
+            {hasBattery && <BatteryHealthScore />}
+            <TariffSwitcher connectedDevices={connectedDevices} />
+          </CollapsibleSection>
+        </div>
+
+        <div style={{ borderTop: "1px solid #0A1020" }}>
+          <CollapsibleSection label="Home settings">
+            {connectedDevices.map((device) => (
+              <DeviceRow key={device.id} device={device} />
+            ))}
+            <button
+              onClick={() => {
+                window.location.href = "/onboarding";
+              }}
+              style={{ width: "100%", background: "none", border: "none", padding: "14px 20px", cursor: "pointer", fontFamily: "inherit", fontSize: 13, color: "#2D3A4A", fontWeight: 500, textAlign: "left" }}
+            >
+              Add device
+            </button>
+          </CollapsibleSection>
+        </div>
+
+        <div style={{ borderTop: "1px solid #0A1020" }}>
+          <CollapsibleSection label="Manual controls (if needed)">
+            {hasEV && <EVReadyBy />}
+            {hasBattery && <BatteryReserve />}
+            <ManualOverride currentPence={currentPence} connectedDevices={connectedDevices} />
+            <ChargerLock connectedDevices={connectedDevices} />
+          </CollapsibleSection>
+        </div>
+      </div>
+    </div>
   );
 }
