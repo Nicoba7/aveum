@@ -1,147 +1,214 @@
 import { useAgileRates } from "../hooks/useAgileRates";
-import { useState } from "react";
-import TomorrowForecast from "../pages/TomorrowForecast";
+import { useMemo, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { SANDBOX, DeviceConfig } from "../pages/SimplifiedDashboard";
-import { buildGridlyPlan } from "../lib/gridlyPlan";
+import { buildGridlyPlan, ConnectedDeviceId, OptimisationMode } from "../lib/gridlyPlan";
+import {
+  buildAIInsightViewModel,
+  buildPlanHeroViewModel,
+  buildPlanSummaryViewModel,
+  buildPlanTimelineViewModel,
+  buildOptimisationModeViewModel,
+  buildPriceWindowsViewModel,
+  groupDisplaySessions,
+  selectDisplaySessions,
+} from "./plan/planViewModels";
+import AIInsightCard from "./plan/AIInsightCard";
+import AIPlanSummaryCard from "./plan/AIPlanSummaryCard";
+import OptimisationModeSelector from "./plan/OptimisationModeSelector";
+import PlanHeroCard from "./plan/PlanHeroCard";
+import PlanTimelineCard from "./plan/PlanTimelineCard";
+import PlanEnergyFlowCard from "./plan/PlanEnergyFlowCard";
+import PriceWindowsCard from "./plan/PriceWindowsCard";
 
+const ENABLE_PLAN_SIMULATION = import.meta.env.DEV;
 
-function getCurrentSlotIndex() {
-  const now = new Date();
-  return Math.min(Math.floor((now.getHours() * 60 + now.getMinutes()) / 30), 47);
+function buildLivePlanContext(now: Date, baseSolarForecastKwh: number, baseBatteryPct: number) {
+  const minuteOfDay = now.getHours() * 60 + now.getMinutes();
+  const dayProgress = minuteOfDay / 1440;
+  const dayPhase = dayProgress * Math.PI * 2;
+
+  const forecastDrift = Math.sin(dayPhase * 1.7) * 1.8;
+  const solarForecastKwh = Math.max(2, Number((baseSolarForecastKwh + forecastDrift).toFixed(1)));
+
+  const batteryDrift = Math.sin(dayPhase - 0.9) * 9;
+  const batteryStartPct = Math.max(12, Math.min(96, Math.round(baseBatteryPct + batteryDrift)));
+
+  return {
+    solarForecastKwh,
+    batteryStartPct,
+  };
 }
 
-function getBarColor(p: number) {
-  if (p < 10) return "#22C55E";
-  if (p < 20) return "#F59E0B";
-  if (p < 30) return "#F97316";
-  return "#EF4444";
-}
-
-export default function PlanTab({ connectedDevices }: { connectedDevices: DeviceConfig[] }) {
-  const { rates, error } = useAgileRates();
-  const currentSlot = getCurrentSlotIndex();
-  const maxPence = Math.max(...rates.map(r => r.pence));
-  const minPence = Math.min(...rates.map(r => r.pence));
-  const [hovered, setHovered] = useState<number | null>(null);
-
-  const hasRates = Array.isArray(rates) && rates.length > 0;
-  const forecastKwh = SANDBOX?.solarForecast?.kwh ?? 0;
-
-  if (!hasRates) {
-    return (
-      <div style={{ padding: "44px 24px 0", color: "#9CA3AF" }}>
-        Plan data is temporarily unavailable.
-      </div>
-    );
-  }
-
-  const connectedDeviceIds = connectedDevices.map(d => d.id) as ("solar" | "battery" | "ev" | "grid")[];
-  const { plan, summary } = buildGridlyPlan(
-    rates,
-    connectedDeviceIds,
-    forecastKwh
-  );
-  const projectedValue = (summary.projectedEarnings + summary.projectedSavings).toFixed(2);
-
+function CollapsibleSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
   return (
-    <div style={{ padding: "44px 0 0" }}>
-      <div style={{ padding: "0 24px 20px" }}>
-        <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: -0.8, marginBottom: 2 }}>Tonight's plan</div>
-        <div style={{ fontSize: 13, color: "#6B7280" }}>Already sorted — nothing you need to do</div>
-      </div>
-
-      {error && (
-        <div style={{ margin: "0 20px 12px", fontSize: 11, color: "#6B7280", textAlign: "center" }}>
-          {error}
-        </div>
-      )}
-
-      <div style={{ margin: "0 20px 16px", background: "#0D1F14", border: "1px solid #16A34A30", borderRadius: 16, padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontSize: 13, color: "#9CA3AF" }}>Projected value tonight</div>
-        <div style={{ fontSize: 22, fontWeight: 900, color: "#22C55E" }}>+£{projectedValue}</div>
-      </div>
-
-      <div style={{ margin: "0 20px" }}>
-        <TomorrowForecast />
-      </div>
-
-      <div style={{ margin: "0 20px 16px", background: "#0D1117", border: "1px solid #1F2937", borderRadius: 16, padding: "16px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1 }}>ENERGY PRICES RIGHT NOW</div>
-          <div style={{ fontSize: 12, color: "#9CA3AF" }}>
-            Now: <span style={{ color: getBarColor(rates[currentSlot]?.pence ?? 0), fontWeight: 700 }}>{rates[currentSlot]?.pence ?? "—"}p</span>
-          </div>
-        </div>
-
-        {hovered !== null && (
-          <div style={{ fontSize: 11, color: "#F9FAFB", background: "#1F2937", borderRadius: 6, padding: "3px 8px", display: "inline-block", marginBottom: 6 }}>
-            {rates[hovered].time} · <span style={{ color: getBarColor(rates[hovered].pence), fontWeight: 700 }}>{rates[hovered].pence}p</span>
-          </div>
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: "100%",
+          background: "none",
+          border: "none",
+          padding: "16px 20px",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <span style={{ fontSize: 12.5, fontWeight: 550, color: "#8795AA", letterSpacing: 0.18 }}>{label}</span>
+        {open ? (
+          <ChevronUp size={14} color="#445066" strokeWidth={2.2} />
+        ) : (
+          <ChevronDown size={14} color="#445066" strokeWidth={2.2} />
         )}
-
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 72 }}>
-          {rates.map((r, i) => (
-            <div
-              key={i}
-              onMouseEnter={() => setHovered(i)}
-              onMouseLeave={() => setHovered(null)}
-              style={{ flex: 1, height: "100%", display: "flex", alignItems: "flex-end", cursor: "pointer" }}
-            >
-              <div
-                style={{
-                  width: "100%",
-                  height: Math.max(2, (r.pence / maxPence) * 72),
-                  background: r.pence === minPence ? "#22C55E" : i === currentSlot ? "#fff" : getBarColor(r.pence),
-                  opacity: hovered !== null && hovered !== i ? 0.3 : 1,
-                  borderRadius: "2px 2px 0 0",
-                  transition: "opacity 0.1s"
-                }}
-              />
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", marginTop: 4 }}>
-          {rates.map((r, i) => (
-            <div key={i} style={{ flex: 1, fontSize: 8, textAlign: "center", color: i === currentSlot ? "#fff" : "#374151" }}>
-              {i % 4 === 0 ? r.time.split(":")[0] : ""}
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: "#4B5563" }}>
-          <span>🟢 Cheapest: <span style={{ color: "#22C55E", fontWeight: 700 }}>{minPence}p</span></span>
-          <span>🔴 Peak: <span style={{ color: "#EF4444", fontWeight: 700 }}>{maxPence}p</span></span>
-        </div>
-      </div>
-
-      <div style={{ margin: "0 20px" }}>
-        <div style={{ fontSize: 10, color: "#4B5563", fontWeight: 700, letterSpacing: 1, marginBottom: 12 }}>WHAT GRIDLY IS DOING TONIGHT</div>
-        {plan
-          .filter(slot => slot.requires.length === 0 || slot.requires.some(r => connectedDevices.some(d => d.id === r)))
-          .map((slot, i, arr) => {
-            const isLast = i === arr.length - 1;
-            return (
-              <div key={i} style={{ display: "flex", gap: 14 }}>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 36, flexShrink: 0 }}>
-                  <div style={{ width: 32, height: 32, borderRadius: 10, background: `${slot.color}15`, border: `1.5px solid ${slot.color}30`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
-                    {slot.action === "CHARGE" ? "⚡" : slot.action === "EXPORT" ? "💰" : slot.action === "SOLAR" ? "☀️" : "⏸"}
-                  </div>
-                  {!isLast && <div style={{ width: 1.5, flex: 1, background: "#1F2937", minHeight: 20 }} />}
-                </div>
-
-                <div style={{ flex: 1, paddingBottom: isLast ? 0 : 16 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB", marginBottom: 2 }}>{slot.title}</div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: slot.color, flexShrink: 0, marginLeft: 8 }}>{slot.price}p</div>
-                  </div>
-                  <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 2 }}>{slot.reason}</div>
-                  <div style={{ fontSize: 10, color: "#374151" }}>{slot.time}</div>
-                </div>
-              </div>
-            );
-          })}
-      </div>
+      </button>
+      {open && <div style={{ paddingBottom: 8 }}>{children}</div>}
     </div>
   );
 }
+
+export default function PlanTab({ connectedDevices, now }: { connectedDevices: DeviceConfig[]; now: Date }) {
+  const { rates, loading, status } = useAgileRates();
+  const currentSlot = Math.min(Math.floor((now.getHours() * 60 + now.getMinutes()) / 30), 47);
+  const [optimisationMode, setOptimisationMode] = useState<OptimisationMode>("BALANCED");
+  const planningStyle = optimisationMode;
+
+  const baseForecastKwh = SANDBOX?.solarForecast?.kwh ?? 0;
+  const baseBatteryPct = SANDBOX?.solar?.batteryPct ?? 55;
+  const livePlanContext = useMemo(
+    () => buildLivePlanContext(now, baseForecastKwh, baseBatteryPct),
+    [now, baseForecastKwh, baseBatteryPct]
+  );
+
+  const forecastKwh = ENABLE_PLAN_SIMULATION ? livePlanContext.solarForecastKwh : baseForecastKwh;
+  const batteryStartPct = ENABLE_PLAN_SIMULATION ? livePlanContext.batteryStartPct : baseBatteryPct;
+  const connectedDeviceIds = useMemo(
+    () => connectedDevices.map((d) => d.id) as ConnectedDeviceId[],
+    [connectedDevices]
+  );
+
+  const connectedDeviceKey = connectedDeviceIds.join("|");
+
+  const { plan, summary, gridlySummary } = useMemo(
+    () =>
+      buildGridlyPlan(rates, connectedDeviceIds, forecastKwh, planningStyle, {
+        batteryCapacityKwh: 10,
+        batteryStartPct,
+        batteryReservePct: planningStyle === "GREENEST" ? 35 : planningStyle === "BALANCED" ? 30 : 22,
+        maxBatteryCyclesPerDay: planningStyle === "GREENEST" ? 1 : 2,
+        evTargetKwh: 16,
+        evReadyBy: "07:00",
+        exportPriceRatio: 0.72,
+        nowSlotIndex: currentSlot,
+        carbonIntensity: SANDBOX?.carbonIntensity,
+      }),
+    [rates, connectedDeviceIds, connectedDeviceKey, forecastKwh, planningStyle, currentSlot, batteryStartPct]
+  );
+
+  const groupedDisplaySessions = useMemo(() => {
+    const sessions = plan.sessions;
+    const displaySessions = selectDisplaySessions(sessions);
+    return groupDisplaySessions(displaySessions);
+  }, [plan.sessions, planningStyle]);
+
+  if (import.meta.env.DEV) {
+    console.log("Gridly sessions:", groupedDisplaySessions);
+  }
+
+  const hasSolar = connectedDeviceIds.includes("solar");
+  const hasBattery = connectedDeviceIds.includes("battery");
+  const hasEV = connectedDeviceIds.includes("ev");
+  const hasGrid = connectedDeviceIds.includes("grid");
+  const solarForecastKwh = forecastKwh;
+  const hasBatteryCharge = groupedDisplaySessions.some((s) => s.type === "battery_charge");
+  const projectedBatteryPct = hasBattery
+    ? Math.min(100, batteryStartPct + (hasBatteryCharge ? 28 : 0))
+    : 0;
+
+  const heroViewModel = buildPlanHeroViewModel({
+    summary,
+    gridlySummary,
+    sessions: groupedDisplaySessions,
+    pricingStatus: status,
+    loading,
+    solarForecastKwh: forecastKwh,
+  });
+
+  const timelineViewModel = buildPlanTimelineViewModel(groupedDisplaySessions, connectedDeviceIds, planningStyle, {
+    solarForecastKwh: forecastKwh,
+    cheapestPrice: summary.cheapestPrice,
+    peakPrice: summary.peakPrice,
+    cheapestWindow: summary.cheapestSlot,
+    peakWindow: summary.peakSlot,
+    evReadyBy: summary.evReadyBy,
+  });
+  const priceWindowsViewModel = buildPriceWindowsViewModel(summary, plan.find((s) => s.action === "SOLAR"), forecastKwh);
+  const planSummaryViewModel = buildPlanSummaryViewModel({
+    summary,
+    gridlySummary,
+    sessions: groupedDisplaySessions,
+  });
+  const insightViewModel = buildAIInsightViewModel({
+    gridlySummary,
+    summary,
+    pricingStatus: status,
+    mode: planningStyle,
+  });
+  const optimisationModeViewModel = buildOptimisationModeViewModel(planningStyle);
+
+  return (
+    <div style={{ background: "#060A12", minHeight: "100vh", paddingBottom: 40 }}>
+
+      <PlanHeroCard viewModel={heroViewModel} />
+      <PlanEnergyFlowCard
+        hasSolar={hasSolar}
+        hasBattery={hasBattery}
+        hasEV={hasEV}
+        hasGrid={hasGrid}
+        solarForecastKwh={solarForecastKwh}
+        projectedBatteryPct={projectedBatteryPct}
+        sessions={groupedDisplaySessions}
+      />
+      <PlanTimelineCard viewModel={timelineViewModel} nowDate={now} />
+
+      <div style={{ margin: "24px 0 0" }}>
+        {gridlySummary.showPriceChart && (
+          <div style={{ borderTop: "1px solid #0A1020" }}>
+            <CollapsibleSection label="Price Outlook">
+              <PriceWindowsCard
+                viewModel={priceWindowsViewModel}
+                rates={rates}
+                currentSlot={currentSlot}
+                sessions={groupedDisplaySessions}
+              />
+            </CollapsibleSection>
+          </div>
+        )}
+
+        <div style={{ borderTop: "1px solid #0A1020" }}>
+          <CollapsibleSection label="Why this plan wins">
+            <AIPlanSummaryCard viewModel={planSummaryViewModel} />
+            {insightViewModel && <AIInsightCard viewModel={insightViewModel} />}
+          </CollapsibleSection>
+        </div>
+
+        <div style={{ borderTop: "1px solid #0A1020" }}>
+          <CollapsibleSection label="Planning Style">
+            <OptimisationModeSelector viewModel={optimisationModeViewModel} onChange={setOptimisationMode} />
+          </CollapsibleSection>
+        </div>
+      </div>
+
+    </div>
+  );
+}
+

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { AgileRate, AGILE_RATES } from "../pages/SimplifiedDashboard";
+import { AgileRate, AGILE_RATES } from "../data/agileRates";
 
 // Octopus Agile public API — no auth required
 // DNO region codes: A=Eastern, B=East Midlands, C=London, D=North Wales,
@@ -15,10 +15,13 @@ function toHHMM(dateStr: string): string {
   return `${h}:${m}`;
 }
 
-export function useAgileRates(): { rates: AgileRate[]; loading: boolean; error: string | null } {
+export type PricingState = "loading" | "live" | "fallback_live" | "sandbox";
+
+export function useAgileRates(): { rates: AgileRate[]; loading: boolean; error: string | null; status: PricingState } {
   const [rates, setRates] = useState<AgileRate[]>(AGILE_RATES); // start with sandbox fallback
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<PricingState>("sandbox");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -51,10 +54,12 @@ export function useAgileRates(): { rates: AgileRate[]; loading: boolean; error: 
 
         setRates(parsed);
         setError(null);
+        setStatus("live");
       } catch (err: any) {
         if (err.name === "AbortError") return;
         // Silently fall back to sandbox data — user never sees a broken app
         setError("Using estimated prices — live prices unavailable right now");
+        setStatus("fallback_live");
       } finally {
         setLoading(false);
       }
@@ -69,5 +74,5 @@ export function useAgileRates(): { rates: AgileRate[]; loading: boolean; error: 
     };
   }, []);
 
-  return { rates, loading, error };
+  return { rates, loading, error, status };
 }

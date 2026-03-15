@@ -6,15 +6,15 @@ describe("SimplifiedDashboard tabs", () => {
   it("renders Home, Plan, and History without crashing", () => {
     render(<SimplifiedDashboard />);
 
-    expect(screen.getByText("RIGHT NOW")).toBeInTheDocument();
+    expect(screen.getByText("QUIETLY IN CONTROL")).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: "Plan" }).at(-1)!);
-    expect(screen.getByText("Tonight's plan")).toBeInTheDocument();
+    expect(screen.getByText("TOMORROW")).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: "History" }).at(-1)!);
-    expect(screen.getByText("Your savings")).toBeInTheDocument();
+    expect(screen.getByText("PROVEN THIS WEEK")).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: "Home" }).at(-1)!);
-    expect(screen.getByText("RIGHT NOW")).toBeInTheDocument();
+    expect(screen.getByText("QUIETLY IN CONTROL")).toBeInTheDocument();
   });
 });
