@@ -321,6 +321,8 @@ describe("runControlLoopExecutionService journal", () => {
     expect(entries[0].cycleFinancialContext?.planningConfidenceLevel).toBe("medium");
     expect(entries[0].cycleFinancialContext?.conservativeAdjustmentApplied).toBe(true);
     expect(entries[0].cycleFinancialContext?.planningWarnings).toContain("PARTIAL_EXPORT_RATE_COVERAGE");
+    expect(entries[0].cycleFinancialContext?.runtimeExecutionPosture).toBe("normal");
+    expect(entries[0].cycleFinancialContext?.runtimeExecutionReasonCodes).toEqual([]);
   });
 
   it("records journal entry for failed dispatch", async () => {

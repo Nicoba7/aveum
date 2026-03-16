@@ -1,4 +1,5 @@
 import type { CanonicalDeviceCommand } from "./canonicalCommand";
+import type { RuntimeExecutionPosture } from "./executionPolicyTypes";
 
 export type CommandExecutionStatus = "issued" | "skipped" | "failed";
 
@@ -28,6 +29,7 @@ export interface CommandExecutionResult {
   message?: string;
   errorCode?: string;
   reasonCodes?: string[];
+  executionPosture?: RuntimeExecutionPosture;
 }
 
 /**

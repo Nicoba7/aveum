@@ -7,6 +7,11 @@ import type { ExecutionCycleFinancialContext } from "../../journal/executionJour
 import type { DeviceShadowStore } from "../../shadow/deviceShadowStore";
 import type { CommandExecutionResult, DeviceCommandExecutor } from "../controlLoopExecution/types";
 import { runControlLoopExecutionService } from "../controlLoopExecution/service";
+import type {
+  RuntimeExecutionGuardrailContext,
+  RuntimeExecutionMode,
+  RuntimeExecutionPosture,
+} from "../controlLoopExecution/executionPolicyTypes";
 import { buildControlLoopInputFromObservedState } from "../telemetry/buildControlLoopInputFromObservedState";
 import { ingestCanonicalTelemetry, type TelemetryIngestionResult } from "../telemetry/ingestionService";
 import type { ObservedDeviceStateStore } from "../../observed/observedDeviceStateStore";
@@ -17,6 +22,8 @@ export interface ExecutionResultSummary {
   issued: number;
   skipped: number;
   failed: number;
+  suppressed?: number;
+  executionPosture?: RuntimeExecutionPosture;
 }
 
 export interface RunSingleTeslaCycleInput {
@@ -33,6 +40,10 @@ export interface RunSingleTeslaCycleInput {
   shadowStore?: DeviceShadowStore;
   journalStore?: ExecutionJournalStore;
   cycleFinancialContext?: Omit<ExecutionCycleFinancialContext, "decisionsTaken">;
+  runtimeGuardrailContext?: RuntimeExecutionGuardrailContext;
+  runtimeExecutionMode?: RuntimeExecutionMode;
+  cycleId?: string;
+  replanReason?: string;
   deviceTelemetry?: Record<string, ControlLoopDeviceTelemetry>;
   freshnessMaxAgeSeconds?: number;
 }
@@ -45,11 +56,17 @@ export interface RunSingleTeslaCycleResult {
 }
 
 function summarizeExecutionResults(results: CommandExecutionResult[]): ExecutionResultSummary {
+  const suppressed = results.filter((result) =>
+    result.status === "skipped" &&
+    (result.reasonCodes ?? []).some((code) => code.startsWith("RUNTIME_")),
+  ).length;
+
   return {
     total: results.length,
     issued: results.filter((result) => result.status === "issued").length,
     skipped: results.filter((result) => result.status === "skipped").length,
     failed: results.filter((result) => result.status === "failed").length,
+    suppressed,
   };
 }
 
@@ -86,12 +103,18 @@ export async function runSingleTeslaCycle(
     input.shadowStore,
     input.journalStore,
     input.cycleFinancialContext,
+    input.runtimeGuardrailContext,
+    input.runtimeExecutionMode,
+    { cycleId: input.cycleId, replanReason: input.replanReason },
   );
 
   return {
     telemetryIngestionResult,
     controlLoopResult: execution.controlLoopResult,
     executionResults: execution.executionResults,
-    executionSummary: summarizeExecutionResults(execution.executionResults),
+    executionSummary: {
+      ...summarizeExecutionResults(execution.executionResults),
+      executionPosture: execution.executionPosture,
+    },
   };
 }

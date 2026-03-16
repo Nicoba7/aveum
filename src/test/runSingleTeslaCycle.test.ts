@@ -115,6 +115,7 @@ describe("runSingleTeslaCycle", () => {
     expect(result.controlLoopResult.commandsToIssue).toHaveLength(1);
     expect(result.executionSummary.total).toBe(1);
     expect(result.executionSummary.issued).toBe(1);
+    expect(result.executionSummary.executionPosture).toBe("normal");
     expect(observedStateStore.getDeviceState("tesla-vehicle-1")?.batterySocPercent).toBe(68);
   });
 

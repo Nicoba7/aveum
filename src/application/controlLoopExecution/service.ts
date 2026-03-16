@@ -20,14 +20,33 @@ import type {
   ExecutionCycleDecisionSummary,
   ExecutionCycleFinancialContext,
 } from "../../journal/executionJournal";
+import type { CycleEconomicSnapshot } from "../../journal/executionJournal";
 import { toExecutionJournalEntry } from "./toExecutionJournalEntry";
 import { evaluateExecutionPolicy } from "./evaluateExecutionPolicy";
-import type { ExecutionPolicyReasonCode } from "./executionPolicyTypes";
+import type {
+  ExecutionPolicyReasonCode,
+  RuntimeExecutionMode,
+  RuntimeExecutionPosture,
+  RuntimeExecutionGuardrailContext,
+} from "./executionPolicyTypes";
 import { projectExecutionOutcome } from "./projectExecutionOutcome";
+import { evaluateRuntimeExecutionGuardrail } from "./evaluateRuntimeExecutionGuardrail";
+import { classifyRuntimeExecutionPosture } from "./classifyRuntimeExecutionPosture";
 
 export interface ControlLoopExecutionServiceResult {
   controlLoopResult: ControlLoopResult;
   executionResults: CommandExecutionResult[];
+  executionPosture: RuntimeExecutionPosture;
+}
+
+function withExecutionPosture(
+  results: CommandExecutionResult[],
+  executionPosture: RuntimeExecutionPosture,
+): CommandExecutionResult[] {
+  return results.map((result) => ({
+    ...result,
+    executionPosture,
+  }));
 }
 
 function mapPreflightFailure(
@@ -111,6 +130,76 @@ function appendJournalEntries(
   });
 }
 
+function appendCycleHeartbeat(
+  journalStore: ExecutionJournalStore | undefined,
+  recordedAt: string,
+  executionPosture: RuntimeExecutionPosture,
+  runtimeGuardrailContext: RuntimeExecutionGuardrailContext | undefined,
+  outcomes: CommandExecutionResult[],
+  failClosedTriggered: boolean,
+  cycleHeartbeatMeta?: { cycleId?: string; replanReason?: string },
+  cycleFinancialContext?: ExecutionCycleFinancialContext,
+): void {
+  if (!journalStore) {
+    return;
+  }
+
+  const commandsSuppressed = outcomes.filter(
+    (r) => r.status === "skipped" && (r.reasonCodes ?? []).some((c) => c.startsWith("RUNTIME_")),
+  ).length;
+
+  journalStore.appendHeartbeat({
+    entryKind: "cycle_heartbeat",
+    cycleId: cycleHeartbeatMeta?.cycleId,
+    recordedAt,
+    executionPosture,
+    planFreshnessStatus: runtimeGuardrailContext?.planFreshnessStatus,
+    replanTrigger: runtimeGuardrailContext?.replanTrigger,
+    replanReason: cycleHeartbeatMeta?.replanReason,
+    stalePlanReuseCount: runtimeGuardrailContext?.stalePlanReuseCount,
+    safeHoldMode: runtimeGuardrailContext?.safeHoldMode,
+    stalePlanWarning: runtimeGuardrailContext?.stalePlanWarning,
+    commandsIssued: outcomes.filter((r) => r.status === "issued").length,
+    commandsSkipped: outcomes.filter((r) => r.status === "skipped").length,
+    commandsFailed: outcomes.filter((r) => r.status === "failed").length,
+    commandsSuppressed,
+    failClosedTriggered,
+    economicSnapshot: buildCycleEconomicSnapshot(cycleFinancialContext, executionPosture, commandsSuppressed),
+    schemaVersion: "cycle-heartbeat.v1",
+  });
+}
+
+const VALUE_SEEKING_ACTIONS = new Set([
+  "charge_battery",
+  "discharge_battery",
+  "charge_ev",
+  "export_to_grid",
+]);
+
+function buildCycleEconomicSnapshot(
+  ctx: ExecutionCycleFinancialContext | undefined,
+  executionPosture: RuntimeExecutionPosture,
+  commandsSuppressed: number,
+): CycleEconomicSnapshot | undefined {
+  if (!ctx) {
+    return undefined;
+  }
+
+  const hasValueSeekingDecisions = ctx.decisionsTaken.some((d) => VALUE_SEEKING_ACTIONS.has(d.action));
+  const valueSeekingExecutionDeferred =
+    executionPosture !== "normal" && commandsSuppressed > 0 && hasValueSeekingDecisions;
+
+  return {
+    optimizationMode: ctx.optimizationMode,
+    planningConfidenceLevel: ctx.planningConfidenceLevel,
+    conservativeAdjustmentApplied: ctx.conservativeAdjustmentApplied,
+    hasValueSeekingDecisions,
+    valueSeekingExecutionDeferred,
+    estimatedSavingsVsBaselinePence: ctx.valueLedger.estimatedSavingsVsBaselinePence,
+    planningInputCoverage: ctx.planningInputCoverage,
+  };
+}
+
 function buildCycleDecisionSummaries(controlLoopResult: ControlLoopResult): ExecutionCycleDecisionSummary[] {
   return controlLoopResult.activeDecisions.map((decision) => ({
     decisionId: decision.decisionId,
@@ -181,12 +270,34 @@ export async function runControlLoopExecutionService(
   shadowStore?: DeviceShadowStore,
   journalStore?: ExecutionJournalStore,
   cycleFinancialContext?: Omit<ExecutionCycleFinancialContext, "decisionsTaken">,
+  runtimeGuardrailContext?: RuntimeExecutionGuardrailContext,
+  runtimeExecutionMode: RuntimeExecutionMode = "standard",
+  cycleHeartbeatMeta?: { cycleId?: string; replanReason?: string },
 ): Promise<ControlLoopExecutionServiceResult> {
   const controlLoopResult = runControlLoop(input);
+  const missingRuntimeContextInStrictMode =
+    runtimeExecutionMode === "continuous_live_strict" && !runtimeGuardrailContext;
+
+  const postureClassification = missingRuntimeContextInStrictMode
+    ? {
+      posture: "hold_only" as const,
+      reasonCodes: [
+        "RUNTIME_CONSERVATIVE_MODE_ACTIVE" as const,
+        "RUNTIME_CONTEXT_MISSING" as const,
+      ],
+      warning:
+        "Runtime guardrail context missing in continuous live mode. Live dispatch suppressed.",
+    }
+    : classifyRuntimeExecutionPosture(runtimeGuardrailContext);
+
+  const executionPosture = postureClassification.posture;
   const enrichedCycleFinancialContext = cycleFinancialContext
     ? {
       ...cycleFinancialContext,
       decisionsTaken: buildCycleDecisionSummaries(controlLoopResult),
+      runtimeExecutionPosture: executionPosture,
+      runtimeExecutionReasonCodes: postureClassification.reasonCodes,
+      runtimeExecutionWarning: postureClassification.warning,
     }
     : undefined;
 
@@ -194,9 +305,15 @@ export async function runControlLoopExecutionService(
   const requestLookup = new Map(requests.map((request) => [request.executionRequestId, request]));
 
   if (requests.length === 0) {
+    appendCycleHeartbeat(
+      journalStore, input.now, executionPosture,
+      runtimeGuardrailContext, [], missingRuntimeContextInStrictMode, cycleHeartbeatMeta,
+      enrichedCycleFinancialContext,
+    );
     return {
       controlLoopResult,
       executionResults: [],
+      executionPosture,
     };
   }
 
@@ -207,6 +324,32 @@ export async function runControlLoopExecutionService(
   const reservedDeviceIds = new Set<string>();
 
   for (const request of requests) {
+    if (missingRuntimeContextInStrictMode) {
+      policyDenials.push(
+        mapPolicyDenied(request, postureClassification.reasonCodes),
+      );
+      continue;
+    }
+
+    const matchedDecision = request.decisionId
+      ? controlLoopResult.activeDecisions.find((decision) => decision.decisionId === request.decisionId)
+      : undefined;
+
+    const runtimeGuardrailDecision = evaluateRuntimeExecutionGuardrail({
+      command: request.canonicalCommand,
+      decisionAction: matchedDecision?.action,
+      runtimeContext: runtimeGuardrailContext,
+      runtimePosture: executionPosture,
+      postureClassification,
+    });
+
+    if (runtimeGuardrailDecision.policy === "suppress") {
+      policyDenials.push(
+        mapPolicyDenied(request, runtimeGuardrailDecision.reasonCodes),
+      );
+      continue;
+    }
+
     if (!capabilitiesProvider) {
       dispatchableRequests.push(request);
       continue;
@@ -266,20 +409,37 @@ export async function runControlLoopExecutionService(
   }
 
   if (!dispatchableRequests.length) {
-    const outcomes = [...preflightFailures, ...reconciliationSkips, ...policyDenials];
+    const outcomes = withExecutionPosture(
+      [...preflightFailures, ...reconciliationSkips, ...policyDenials],
+      executionPosture,
+    );
     appendJournalEntries(journalStore, requestLookup, outcomes, input.now, enrichedCycleFinancialContext);
+    appendCycleHeartbeat(
+      journalStore, input.now, executionPosture,
+      runtimeGuardrailContext, outcomes, missingRuntimeContextInStrictMode, cycleHeartbeatMeta,
+      enrichedCycleFinancialContext,
+    );
 
     return {
       controlLoopResult,
       executionResults: outcomes,
+      executionPosture,
     };
   }
 
   try {
     const executionResults = await executor.execute(dispatchableRequests);
-    const outcomes = [...preflightFailures, ...reconciliationSkips, ...policyDenials, ...executionResults];
+    const outcomes = withExecutionPosture(
+      [...preflightFailures, ...reconciliationSkips, ...policyDenials, ...executionResults],
+      executionPosture,
+    );
 
     appendJournalEntries(journalStore, requestLookup, outcomes, input.now, enrichedCycleFinancialContext);
+    appendCycleHeartbeat(
+      journalStore, input.now, executionPosture,
+      runtimeGuardrailContext, outcomes, missingRuntimeContextInStrictMode, cycleHeartbeatMeta,
+      enrichedCycleFinancialContext,
+    );
 
     if (shadowStore) {
       const requestByExecutionId = new Map(
@@ -314,21 +474,31 @@ export async function runControlLoopExecutionService(
     return {
       controlLoopResult,
       executionResults: outcomes,
+      executionPosture,
     };
   } catch (error) {
     const failedResults = mapFailedResults(dispatchableRequests, error);
-    const outcomes = [
-      ...preflightFailures,
-      ...reconciliationSkips,
-      ...policyDenials,
-      ...failedResults,
-    ];
+    const outcomes = withExecutionPosture(
+      [
+        ...preflightFailures,
+        ...reconciliationSkips,
+        ...policyDenials,
+        ...failedResults,
+      ],
+      executionPosture,
+    );
 
     appendJournalEntries(journalStore, requestLookup, outcomes, input.now, enrichedCycleFinancialContext);
+    appendCycleHeartbeat(
+      journalStore, input.now, executionPosture,
+      runtimeGuardrailContext, outcomes, missingRuntimeContextInStrictMode, cycleHeartbeatMeta,
+      enrichedCycleFinancialContext,
+    );
 
     return {
       controlLoopResult,
       executionResults: outcomes,
+      executionPosture,
     };
   }
 }

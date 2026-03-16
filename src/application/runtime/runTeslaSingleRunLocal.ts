@@ -80,6 +80,8 @@ export interface TeslaLocalSingleRunSuccessSummary {
     issued: number;
     skipped: number;
     failed: number;
+    suppressed?: number;
+    executionPosture?: "normal" | "conservative" | "hold_only";
   };
   executionJournalEntries: ExecutionJournalEntry[];
 }
