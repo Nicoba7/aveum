@@ -1,5 +1,5 @@
 import type { DeviceCommand, SystemState } from "../domain";
-import type { OptimizerDecision, OptimizerOutput } from "../domain/optimizer";
+import type { OptimizerDecision, OptimizerOpportunity, OptimizerOutput } from "../domain/optimizer";
 import type { ObservedStateFreshnessSummary } from "../domain/observedStateFreshness";
 import type { TelemetryHealthSummary } from "../domain/telemetryHealth";
 
@@ -26,6 +26,7 @@ export interface SkippedDecision {
 
 export interface ControlLoopResult {
   activeDecisions: OptimizerDecision[];
+  activeOpportunities: OptimizerOpportunity[];
   commandsToIssue: DeviceCommand[];
   skippedDecisions: SkippedDecision[];
   replanRequired: boolean;
@@ -96,6 +97,22 @@ export function selectCommandsToIssue(now: string, optimizerOutput: OptimizerOut
   });
 }
 
+export function selectActiveOpportunities(now: string, optimizerOutput: OptimizerOutput): OptimizerOpportunity[] {
+  const nowMs = toMillis(now);
+  if (!Number.isFinite(nowMs)) {
+    return [];
+  }
+
+  return (optimizerOutput.opportunities ?? []).filter((opportunity) => {
+    const window = commandWindow(opportunity.command);
+    if (!window) {
+      return false;
+    }
+
+    return includesNow(nowMs, window.startAt, window.endAt);
+  });
+}
+
 /**
  * Canonical control-loop boundary that turns optimizer plan output into per-tick execution intent.
  *
@@ -108,6 +125,7 @@ export function runControlLoop(input: ControlLoopInput): ControlLoopResult {
   if (!Number.isFinite(nowMs)) {
     return {
       activeDecisions: [],
+      activeOpportunities: [],
       commandsToIssue: [],
       skippedDecisions: [],
       replanRequired: true,
@@ -116,6 +134,7 @@ export function runControlLoop(input: ControlLoopInput): ControlLoopResult {
   }
 
   const activeDecisions = selectActiveDecisions(input.now, input.optimizerOutput);
+  const activeOpportunities = selectActiveOpportunities(input.now, input.optimizerOutput);
   const commandsToIssue = selectCommandsToIssue(input.now, input.optimizerOutput);
 
   const skippedDecisions: SkippedDecision[] = [];
@@ -147,6 +166,7 @@ export function runControlLoop(input: ControlLoopInput): ControlLoopResult {
 
   return {
     activeDecisions,
+    activeOpportunities,
     commandsToIssue,
     skippedDecisions,
     replanRequired,

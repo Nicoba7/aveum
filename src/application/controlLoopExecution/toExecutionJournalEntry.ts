@@ -34,6 +34,11 @@ const POLICY_REASON_CODES = new Set([
   "OBSERVED_STATE_MISSING",
   "OBSERVED_STATE_STALE",
   "OBSERVED_STATE_UNKNOWN",
+  "ECONOMIC_INPUTS_UNCERTAIN",
+  "ECONOMIC_TARIFF_INPUT_MISSING",
+  "ECONOMIC_CONFIDENCE_LOW",
+  "INFERIOR_ECONOMIC_VALUE",
+  "INFERIOR_HOUSEHOLD_ECONOMIC_VALUE",
   "RUNTIME_CONSERVATIVE_MODE_ACTIVE",
   "RUNTIME_SAFE_HOLD_ACTIVE",
   "RUNTIME_PLAN_EXPIRED",
@@ -68,23 +73,28 @@ export function toExecutionJournalEntry(
   canonicalCommand: CanonicalDeviceCommand,
   executionResult: CommandExecutionResult,
   recordedAt: string,
+  cycleId?: string,
   cycleFinancialContext?: ExecutionCycleFinancialContext,
 ): ExecutionJournalEntry {
   const outcomeProjection = projectExecutionOutcome(executionResult, canonicalCommand);
 
   return {
     entryId: `${executionResult.executionRequestId}:${recordedAt}`,
+    cycleId,
     recordedAt,
+    opportunityId: executionResult.opportunityId,
     decisionId: executionResult.decisionId,
     executionRequestId: executionResult.executionRequestId,
     idempotencyKey: executionResult.idempotencyKey,
     targetDeviceId: executionResult.targetDeviceId,
     canonicalCommand,
     status: executionResult.status,
+    executionError: executionResult.errorCode,
     acknowledgementStatus: outcomeProjection.acknowledgementStatus,
     reasonCodes: executionResult.reasonCodes,
     stage: inferStage(executionResult.reasonCodes, executionResult.status),
     cycleFinancialContext,
+    economicArbitration: executionResult.economicArbitration,
     schemaVersion: "execution-journal.v1",
   };
 }

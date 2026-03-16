@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SystemState } from "../domain";
-import type { OptimizerDecision, OptimizerOutput } from "../domain/optimizer";
+import type { OptimizerDecision, OptimizerOpportunity, OptimizerOutput } from "../domain/optimizer";
 import {
   buildCommandExecutionIdentity,
 } from "../application/controlLoopExecution/identity";
 import { mapToCanonicalDeviceCommand } from "../application/controlLoopExecution/canonicalCommand";
 import { runControlLoopExecutionService } from "../application/controlLoopExecution/service";
+import { InMemoryDeviceCapabilitiesProvider } from "../capabilities/deviceCapabilitiesProvider";
 import type {
   CommandExecutionRequest,
   CommandExecutionResult,
@@ -49,6 +50,7 @@ function buildDecision(windowStart: string, windowEnd: string): OptimizerDecisio
 function buildOutput(options?: {
   decisions?: OptimizerDecision[];
   withCommand?: boolean;
+  opportunities?: OptimizerOpportunity[];
 }): OptimizerOutput {
   const decisions = options?.decisions ?? [];
   const withCommand = options?.withCommand ?? false;
@@ -67,6 +69,7 @@ function buildOutput(options?: {
     status: "ok",
     headline: "Test plan",
     decisions,
+    opportunities: options?.opportunities,
     recommendedCommands: withCommand
       ? [
         {
@@ -178,6 +181,58 @@ describe("runControlLoopExecutionService", () => {
     expect(result.executionResults[0].idempotencyKey).toBe(requests[0].idempotencyKey);
   });
 
+  it("builds execution requests directly from active optimizer opportunities", async () => {
+    const decision = buildDecision("2026-03-16T10:00:00.000Z", "2026-03-16T10:30:00.000Z");
+    const execute = vi.fn(async (requests: CommandExecutionRequest[]) =>
+      requests.map((request) => ({
+        opportunityId: request.opportunityId,
+        executionRequestId: request.executionRequestId,
+        requestId: request.requestId,
+        idempotencyKey: request.idempotencyKey,
+        decisionId: request.decisionId,
+        targetDeviceId: request.targetDeviceId,
+        commandId: request.commandId,
+        deviceId: request.canonicalCommand.targetDeviceId,
+        status: "issued" as const,
+      })),
+    );
+    const executor: DeviceCommandExecutor = { execute };
+
+    const result = await runControlLoopExecutionService(
+      {
+        now: "2026-03-16T10:05:00.000Z",
+        systemState: buildSystemState(),
+        optimizerOutput: buildOutput({
+          decisions: [decision],
+          withCommand: true,
+          opportunities: [
+            {
+              opportunityId: "opp-1",
+              decisionId: decision.decisionId,
+              action: decision.action,
+              targetDeviceId: "battery",
+              targetKind: "battery",
+              requiredCapabilities: ["set_mode"],
+              command: buildRawCommand(),
+              economicSignals: {
+                effectiveStoredEnergyValuePencePerKwh: 12,
+              },
+              planningConfidenceLevel: "high",
+              decisionReason: decision.reason,
+            },
+          ],
+        }),
+      },
+      executor,
+    );
+
+    const requests = execute.mock.calls[0][0] as CommandExecutionRequest[];
+    expect(requests[0].opportunityId).toBe("opp-1");
+    expect(requests[0].idempotencyKey).toContain("opp-1:battery:set_mode:charge");
+    expect(result.controlLoopResult.activeOpportunities).toHaveLength(1);
+    expect(result.executionResults[0].opportunityId).toBe("opp-1");
+  });
+
   it("surfaces executor failures as failed execution results", async () => {
     const execute = vi.fn(async () => {
       throw new Error("Executor offline");
@@ -255,5 +310,158 @@ describe("runControlLoopExecutionService", () => {
       },
       mode: "charge",
     });
+  });
+
+  it("arbitrates only among eligible opportunities and still executes a viable lower-value alternative", async () => {
+    const execute = vi.fn(async (requests: CommandExecutionRequest[]) =>
+      requests.map((request) => ({
+        executionRequestId: request.executionRequestId,
+        requestId: request.requestId,
+        idempotencyKey: request.idempotencyKey,
+        decisionId: request.decisionId,
+        targetDeviceId: request.targetDeviceId,
+        commandId: request.commandId,
+        deviceId: request.targetDeviceId,
+        status: "issued" as const,
+      })),
+    );
+    const executor: DeviceCommandExecutor = { execute };
+    const capabilitiesProvider = new InMemoryDeviceCapabilitiesProvider([
+      {
+        deviceId: "battery",
+        supportedCommandKinds: ["set_mode"],
+        supportedModes: ["charge"],
+        supportsImmediateExecution: true,
+        schemaVersion: "capabilities.v1",
+      },
+    ]);
+
+    const optimizerOutput: OptimizerOutput = {
+      schemaVersion: "optimizer-output.v1.1",
+      plannerVersion: "canonical-runtime.v1",
+      planId: "plan-eligibility-before-arbitration",
+      generatedAt: "2026-03-16T10:00:00.000Z",
+      planningWindow: {
+        startAt: "2026-03-16T10:00:00.000Z",
+        endAt: "2026-03-16T10:30:00.000Z",
+      },
+      status: "ok",
+      headline: "Eligibility should precede arbitration",
+      decisions: [
+        {
+          decisionId: "decision-low",
+          startAt: "2026-03-16T10:00:00.000Z",
+          endAt: "2026-03-16T10:30:00.000Z",
+          executionWindow: {
+            startAt: "2026-03-16T10:00:00.000Z",
+            endAt: "2026-03-16T10:30:00.000Z",
+          },
+          action: "charge_battery",
+          targetDeviceIds: ["battery"],
+          targetDevices: [{ deviceId: "battery", kind: "battery", requiredCapabilities: ["set_mode"] }],
+          reason: "Lower-value but eligible charge action.",
+          effectiveStoredEnergyValuePencePerKwh: 5,
+          confidence: 0.9,
+        },
+        {
+          decisionId: "decision-high",
+          startAt: "2026-03-16T10:00:00.000Z",
+          endAt: "2026-03-16T10:30:00.000Z",
+          executionWindow: {
+            startAt: "2026-03-16T10:01:00.000Z",
+            endAt: "2026-03-16T10:29:00.000Z",
+          },
+          action: "discharge_battery",
+          targetDeviceIds: ["battery"],
+          targetDevices: [{ deviceId: "battery", kind: "battery", requiredCapabilities: ["set_mode"] }],
+          reason: "Higher-value but ineligible discharge action.",
+          effectiveStoredEnergyValuePencePerKwh: 15,
+          confidence: 0.9,
+        },
+      ],
+      recommendedCommands: [
+        {
+          commandId: "cmd-low",
+          deviceId: "battery",
+          issuedAt: "2026-03-16T10:00:00.000Z",
+          type: "set_mode",
+          mode: "charge",
+          effectiveWindow: {
+            startAt: "2026-03-16T10:00:00.000Z",
+            endAt: "2026-03-16T10:30:00.000Z",
+          },
+        },
+        {
+          commandId: "cmd-high",
+          deviceId: "battery",
+          issuedAt: "2026-03-16T10:00:00.000Z",
+          type: "set_mode",
+          mode: "discharge",
+          effectiveWindow: {
+            startAt: "2026-03-16T10:01:00.000Z",
+            endAt: "2026-03-16T10:29:00.000Z",
+          },
+        },
+      ],
+      summary: {
+        expectedImportCostPence: 100,
+        expectedExportRevenuePence: 20,
+        expectedNetValuePence: -80,
+      },
+      diagnostics: [],
+      feasibility: {
+        executable: true,
+        reasonCodes: ["PLAN_COMPUTED"],
+      },
+      assumptions: [],
+      warnings: [],
+      confidence: 0.9,
+    };
+
+    const result = await runControlLoopExecutionService(
+      {
+        now: "2026-03-16T10:05:00.000Z",
+        systemState: buildSystemState(),
+        optimizerOutput,
+      },
+      executor,
+      capabilitiesProvider,
+      undefined,
+      undefined,
+      {
+        optimizationMode: "balanced",
+        valueLedger: {
+          optimizationMode: "balanced",
+          estimatedImportCostPence: 100,
+          estimatedExportRevenuePence: 20,
+          estimatedBatteryDegradationCostPence: 2,
+          estimatedNetCostPence: 82,
+          baselineType: "hold_current_state",
+          baselineNetCostPence: 95,
+          baselineImportCostPence: 95,
+          baselineExportRevenuePence: 20,
+          baselineBatteryDegradationCostPence: 0,
+          estimatedSavingsVsBaselinePence: 13,
+          assumptions: [],
+          caveats: [],
+          confidence: 0.9,
+        },
+      },
+    );
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    const dispatchedRequests = execute.mock.calls[0][0] as CommandExecutionRequest[];
+    expect(dispatchedRequests).toHaveLength(1);
+    expect(dispatchedRequests[0].commandId).toBe("cmd-low");
+
+    const issued = result.executionResults.find((entry) => entry.commandId === "cmd-low");
+    const rejectedHighValue = result.executionResults.find((entry) => entry.commandId === "cmd-high");
+
+    expect(issued?.status).toBe("issued");
+    expect(issued?.reasonCodes).toBeUndefined();
+    expect(rejectedHighValue?.status).toBe("failed");
+    expect(rejectedHighValue?.reasonCodes).toEqual(["MODE_NOT_SUPPORTED"]);
+    expect(rejectedHighValue?.errorCode).toBe("MODE_NOT_SUPPORTED");
+    expect(issued?.reasonCodes?.includes("INFERIOR_ECONOMIC_VALUE")).not.toBe(true);
   });
 });

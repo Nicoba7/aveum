@@ -3,7 +3,23 @@ import type { RuntimeExecutionPosture } from "./executionPolicyTypes";
 
 export type CommandExecutionStatus = "issued" | "skipped" | "failed";
 
+export interface ExecutionEconomicArbitrationTrace {
+  comparisonScope: "device" | "household";
+  selectedOpportunityId?: string;
+  selectedExecutionRequestId: string;
+  selectedDecisionId?: string;
+  selectedTargetDeviceId: string;
+  selectedAction?: string;
+  selectedScorePencePerKwh: number;
+  candidateScorePencePerKwh?: number;
+  scoreDeltaPencePerKwh?: number;
+  selectionReason: string;
+  comparisonReason?: string;
+  alternativesConsidered: number;
+}
+
 export interface CommandExecutionRequest {
+  opportunityId?: string;
   executionRequestId: string;
   /** Transitional alias retained while the application seam settles. */
   requestId: string;
@@ -17,6 +33,7 @@ export interface CommandExecutionRequest {
 }
 
 export interface CommandExecutionResult {
+  opportunityId?: string;
   executionRequestId: string;
   /** Transitional alias retained while the application seam settles. */
   requestId: string;
@@ -30,6 +47,7 @@ export interface CommandExecutionResult {
   errorCode?: string;
   reasonCodes?: string[];
   executionPosture?: RuntimeExecutionPosture;
+  economicArbitration?: ExecutionEconomicArbitrationTrace;
 }
 
 /**

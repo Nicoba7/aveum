@@ -62,6 +62,7 @@ function buildBlockedOutput(input: OptimizerInput): OptimizerOutput {
     headline: "Gridly needs tariff data before it can build a plan.",
     decisions: [],
     recommendedCommands: [],
+    opportunities: [],
     summary: {
       expectedImportCostPence: 0,
       expectedExportRevenuePence: 0,
@@ -127,6 +128,7 @@ export function optimize(input: OptimizerInput): OptimizerOutput {
     headline: explanation.headline,
     decisions: result.decisions,
     recommendedCommands: result.recommendedCommands,
+    opportunities: result.opportunities,
     summary: result.summary,
     diagnostics: explanation.diagnostics,
     planningInputCoverage: result.planningInputCoverage,

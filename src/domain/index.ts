@@ -21,7 +21,11 @@ export type {
   OptimizerDiagnosticSeverity,
   OptimizerFeasibility,
   OptimizerInput,
+  OptimizerOpportunity,
+  OptimizerOpportunityEconomicSignals,
   OptimizerOutput,
+  PlanningConfidenceLevel,
+  PlanningInputCoverage,
   OptimizerStatus,
   OptimizerSummary,
 } from "./optimizer";

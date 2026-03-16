@@ -3,6 +3,7 @@ import type { OptimizerDecision } from "../../domain/optimizer";
 import type { CanonicalDeviceCommand } from "./canonicalCommand";
 
 export interface CommandExecutionIdentity {
+  opportunityId?: string;
   executionRequestId: string;
   idempotencyKey: string;
   decisionId?: string;
@@ -62,6 +63,7 @@ export function buildCommandExecutionIdentity(
   planId: string,
   command: CanonicalDeviceCommand,
   decision?: OptimizerDecision,
+  opportunityId?: string,
 ): CommandExecutionIdentity {
   const window = commandWindow(command);
   const targetDeviceId = command.targetDeviceId;
@@ -69,9 +71,10 @@ export function buildCommandExecutionIdentity(
   const intent = commandIntentDescriptor(command);
   const startAt = window?.startAt ?? "immediate";
   const endAt = window?.endAt ?? "open";
-  const semanticKey = [decisionId ?? "unmatched", targetDeviceId, intent, startAt, endAt].join(":");
+  const semanticKey = [opportunityId ?? decisionId ?? "unmatched", targetDeviceId, intent, startAt, endAt].join(":");
 
   return {
+    opportunityId,
     executionRequestId: `${planId}:${semanticKey}`,
     idempotencyKey: semanticKey,
     decisionId,

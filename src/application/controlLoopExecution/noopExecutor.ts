@@ -10,6 +10,7 @@ import type {
 export class NoopDeviceCommandExecutor implements DeviceCommandExecutor {
   async execute(requests: CommandExecutionRequest[]): Promise<CommandExecutionResult[]> {
     return requests.map((request) => ({
+      opportunityId: request.opportunityId,
       executionRequestId: request.executionRequestId,
       requestId: request.requestId,
       idempotencyKey: request.idempotencyKey,

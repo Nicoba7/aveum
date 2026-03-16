@@ -59,12 +59,13 @@ describe("toExecutionJournalEntry", () => {
   it("maps dispatch outcomes to dispatch stage", () => {
     const entry = toExecutionJournalEntry(
       buildCommand(),
-      buildResult({ status: "issued", reasonCodes: undefined }),
+      buildResult({ opportunityId: "opp-1", status: "issued", reasonCodes: undefined }),
       "2026-03-16T10:05:00.000Z",
     );
 
     expect(entry.stage).toBe("dispatch");
     expect(entry.acknowledgementStatus).toBe("acknowledged");
+    expect(entry.opportunityId).toBe("opp-1");
     expect(entry.executionRequestId).toBe("exec-1");
     expect(entry.idempotencyKey).toBe("idem-1");
   });

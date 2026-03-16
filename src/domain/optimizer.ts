@@ -164,6 +164,28 @@ export interface OptimizerDecisionTarget {
   requiredCapabilities?: DeviceCapability[];
 }
 
+export interface OptimizerOpportunityEconomicSignals {
+  effectiveStoredEnergyValuePencePerKwh?: number;
+  netStoredEnergyValuePencePerKwh?: number;
+  marginalImportAvoidancePencePerKwh?: number;
+  exportValuePencePerKwh?: number;
+}
+
+export interface OptimizerOpportunity {
+  opportunityId: string;
+  decisionId?: string;
+  action?: OptimizerAction;
+  targetDeviceId: string;
+  targetKind?: DeviceKind;
+  requiredCapabilities?: DeviceCapability[];
+  command: DeviceCommand;
+  economicSignals: OptimizerOpportunityEconomicSignals;
+  planningConfidenceLevel?: PlanningConfidenceLevel;
+  conservativeAdjustmentApplied?: boolean;
+  conservativeAdjustmentReason?: string;
+  decisionReason?: string;
+}
+
 /**
  * Feasibility status for execution and downstream control loops.
  */
@@ -195,6 +217,8 @@ export interface OptimizerOutput {
   decisions: OptimizerDecision[];
   /** Commands that should be dispatched now or scheduled for later. */
   recommendedCommands: DeviceCommand[];
+  /** Canonical execution opportunities emitted by the optimizer. */
+  opportunities?: OptimizerOpportunity[];
   /** Aggregated expected outcomes for the plan. */
   summary: OptimizerSummary;
   /** Explainability and quality diagnostics. */

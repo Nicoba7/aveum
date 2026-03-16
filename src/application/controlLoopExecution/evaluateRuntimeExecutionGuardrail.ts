@@ -9,10 +9,12 @@ import {
   classifyRuntimeExecutionPosture,
   type RuntimeExecutionPostureClassification,
 } from "./classifyRuntimeExecutionPosture";
+import type { ExecutionCycleFinancialContext } from "../../journal/executionJournal";
 
 export interface RuntimeExecutionGuardrailInput {
   command: CanonicalDeviceCommand;
   decisionAction?: OptimizerAction;
+  cycleFinancialContext?: ExecutionCycleFinancialContext;
   runtimeContext?: RuntimeExecutionGuardrailContext;
   runtimePosture?: RuntimeExecutionPosture;
   postureClassification?: RuntimeExecutionPostureClassification;
@@ -57,6 +59,39 @@ function isAggressiveCommand(command: CanonicalDeviceCommand): boolean {
   );
 }
 
+function evaluateEconomicUncertaintyReasonCodes(
+  input: RuntimeExecutionGuardrailInput,
+): ExecutionPolicyReasonCode[] {
+  const reasonCodes: ExecutionPolicyReasonCode[] = [];
+  const cycleFinancialContext = input.cycleFinancialContext;
+
+  if (!cycleFinancialContext) {
+    return reasonCodes;
+  }
+
+  const importCoverage = cycleFinancialContext.planningInputCoverage?.tariffImport.availableSlots;
+  const exportCoverage = cycleFinancialContext.planningInputCoverage?.tariffExport.availableSlots;
+  const action = input.decisionAction;
+
+  if (cycleFinancialContext.planningConfidenceLevel === "low") {
+    reasonCodes.push("ECONOMIC_CONFIDENCE_LOW");
+  }
+
+  if (importCoverage === 0) {
+    reasonCodes.push("ECONOMIC_TARIFF_INPUT_MISSING");
+  }
+
+  if (action === "export_to_grid" && exportCoverage === 0) {
+    reasonCodes.push("ECONOMIC_TARIFF_INPUT_MISSING");
+  }
+
+  if (reasonCodes.length > 0) {
+    reasonCodes.unshift("ECONOMIC_INPUTS_UNCERTAIN");
+  }
+
+  return Array.from(new Set(reasonCodes));
+}
+
 /**
  * Pure runtime guardrail evaluator.
  *
@@ -67,6 +102,20 @@ function isAggressiveCommand(command: CanonicalDeviceCommand): boolean {
 export function evaluateRuntimeExecutionGuardrail(
   input: RuntimeExecutionGuardrailInput,
 ): RuntimeExecutionGuardrailDecision {
+  const economicUncertaintyReasonCodes = evaluateEconomicUncertaintyReasonCodes(input);
+  const aggressiveByAction = input.decisionAction
+    ? AGGRESSIVE_ACTIONS.has(input.decisionAction)
+    : false;
+  const aggressiveByCommand = isAggressiveCommand(input.command);
+
+  if (economicUncertaintyReasonCodes.length > 0 && (aggressiveByAction || aggressiveByCommand)) {
+    return {
+      policy: "suppress",
+      reasonCodes: economicUncertaintyReasonCodes,
+      reason: "Economic inputs are uncertain. Aggressive command dispatch suppressed.",
+    };
+  }
+
   const postureClassification = input.postureClassification ?? classifyRuntimeExecutionPosture(input.runtimeContext);
   const posture = input.runtimePosture ?? postureClassification.posture;
   const warning = input.runtimeContext?.stalePlanWarning ?? postureClassification.warning;
@@ -76,11 +125,6 @@ export function evaluateRuntimeExecutionGuardrail(
   }
 
   const reasonCodes: ExecutionPolicyReasonCode[] = [...postureClassification.reasonCodes];
-
-  const aggressiveByAction = input.decisionAction
-    ? AGGRESSIVE_ACTIONS.has(input.decisionAction)
-    : false;
-  const aggressiveByCommand = isAggressiveCommand(input.command);
 
   if (isHoldLikeCommand(input.command) && !aggressiveByAction) {
     return {

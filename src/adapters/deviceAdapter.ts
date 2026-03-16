@@ -14,6 +14,7 @@ export type DeviceAdapterFailureReasonCode =
 export interface DeviceAdapterExecutionContext {
   executionRequestId?: string;
   idempotencyKey?: string;
+  opportunityId?: string;
   decisionId?: string;
   requestedAt?: string;
 }

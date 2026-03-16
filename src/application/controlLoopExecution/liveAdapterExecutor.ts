@@ -11,6 +11,7 @@ function mapAdapterResultToExecutionResult(
   adapterResult: DeviceAdapterExecutionResult,
 ): CommandExecutionResult {
   return {
+    opportunityId: request.opportunityId,
     executionRequestId: request.executionRequestId,
     requestId: request.requestId,
     idempotencyKey: request.idempotencyKey,
@@ -38,6 +39,7 @@ export class LiveAdapterDeviceCommandExecutor implements DeviceCommandExecutor {
         const adapterResult = await this.registry.dispatchCanonicalCommand(request.canonicalCommand, {
           executionRequestId: request.executionRequestId,
           idempotencyKey: request.idempotencyKey,
+          opportunityId: request.opportunityId,
           decisionId: request.decisionId,
           requestedAt: request.requestedAt,
         });
@@ -45,6 +47,7 @@ export class LiveAdapterDeviceCommandExecutor implements DeviceCommandExecutor {
         results.push(mapAdapterResultToExecutionResult(request, adapterResult));
       } catch (error) {
         results.push({
+          opportunityId: request.opportunityId,
           executionRequestId: request.executionRequestId,
           requestId: request.requestId,
           idempotencyKey: request.idempotencyKey,

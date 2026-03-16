@@ -45,6 +45,8 @@ function buildInput(params: {
   capturedAt?: string;
   loadSlotsCount?: number;
   solarSlotsCount?: number;
+  devices?: DeviceState[];
+  evConnected?: boolean;
 }): OptimizerInput {
   const start = new Date("2026-03-16T10:00:00.000Z").getTime();
   const capturedAt = params.capturedAt ?? "2026-03-16T10:00:00.000Z";
@@ -56,7 +58,7 @@ function buildInput(params: {
       siteId: "site-1",
       capturedAt,
       timezone: "Europe/London",
-      devices: buildDevices(),
+      devices: params.devices ?? buildDevices(),
       homeLoadW: Math.round(params.loadKwh * 2000),
       solarGenerationW: Math.round(params.solarKwh * 2000),
       batteryPowerW: 0,
@@ -64,7 +66,7 @@ function buildInput(params: {
       gridPowerW: 0,
       batterySocPercent: 60,
       batteryCapacityKwh: 10,
-      evConnected: false,
+      evConnected: params.evConnected ?? false,
     },
     forecasts: {
       generatedAt: "2026-03-16T10:00:00.000Z",
@@ -303,6 +305,91 @@ describe("optimize mode-aware objective behavior", () => {
 
     expect(result.decisions[0]?.targetDeviceIds).toEqual(["battery-1"]);
     expect(result.recommendedCommands[0]?.deviceId).toBe("battery-1");
+  });
+
+  it("emits one command per dispatchable battery in multi-device charge decisions", () => {
+    const result = optimize(
+      buildInput({
+        mode: "cost",
+        importRates: [9, 10],
+        exportRates: [6, 6],
+        loadKwh: 1,
+        solarKwh: 0,
+        devices: [
+          {
+            deviceId: "battery-1",
+            kind: "battery",
+            brand: "GivEnergy",
+            name: "Battery One",
+            connectionStatus: "online",
+            lastUpdatedAt: "2026-03-16T10:00:00.000Z",
+            capabilities: ["set_mode", "read_soc"],
+          },
+          {
+            deviceId: "battery-2",
+            kind: "battery",
+            brand: "GivEnergy",
+            name: "Battery Two",
+            connectionStatus: "online",
+            lastUpdatedAt: "2026-03-16T10:00:00.000Z",
+            capabilities: ["set_mode", "read_soc"],
+          },
+        ],
+      }),
+    );
+
+    expect(result.decisions[0]?.action).toBe("charge_battery");
+    expect(result.decisions[0]?.targetDeviceIds).toEqual(["battery-1", "battery-2"]);
+
+    const firstDecisionCommands = result.recommendedCommands.filter((command) =>
+      command.commandId.includes("-battery-0-"),
+    );
+    expect(firstDecisionCommands.map((command) => command.deviceId)).toEqual(["battery-1", "battery-2"]);
+  });
+
+  it("keeps heterogeneous action targets while only dispatching controllable devices", () => {
+    const result = optimize(
+      buildInput({
+        mode: "cost",
+        importRates: [20],
+        exportRates: [18],
+        loadKwh: 1,
+        solarKwh: 3,
+        devices: [
+          {
+            deviceId: "battery-1",
+            kind: "battery",
+            brand: "GivEnergy",
+            name: "Battery",
+            connectionStatus: "online",
+            lastUpdatedAt: "2026-03-16T10:00:00.000Z",
+            capabilities: ["set_mode", "read_soc"],
+          },
+          {
+            deviceId: "solar-1",
+            kind: "solar_inverter",
+            brand: "SolarEdge",
+            name: "Solar",
+            connectionStatus: "online",
+            lastUpdatedAt: "2026-03-16T10:00:00.000Z",
+            capabilities: ["set_mode", "read_power"],
+          },
+          {
+            deviceId: "grid-1",
+            kind: "smart_meter",
+            brand: "Octopus",
+            name: "Grid",
+            connectionStatus: "online",
+            lastUpdatedAt: "2026-03-16T10:00:00.000Z",
+            capabilities: ["read_tariff", "read_power"],
+          },
+        ],
+      }),
+    );
+
+    expect(result.decisions[0]?.action).toBe("export_to_grid");
+    expect(result.decisions[0]?.targetDeviceIds).toEqual(["battery-1", "solar-1", "grid-1"]);
+    expect(result.recommendedCommands.map((command) => command.deviceId)).toEqual(["battery-1", "solar-1"]);
   });
 
   it("rejects low-margin heuristic cycling when planning confidence is reduced", () => {

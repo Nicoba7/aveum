@@ -317,6 +317,102 @@ describe("cycle heartbeat journal", () => {
     expect(journal.getAll()).toHaveLength(1);
     expect(journal.getAll()[0].status).toBe("issued");
   });
+
+  it("aggregates heartbeat counters for heterogeneous multi-action cycles", async () => {
+    const journal = new InMemoryExecutionJournalStore();
+    const executor = buildExecutor("issued");
+
+    const guardrail: RuntimeExecutionGuardrailContext = {
+      safeHoldMode: false,
+      planFreshnessStatus: "fresh",
+      stalePlanReuseCount: 0,
+    };
+
+    await runControlLoopExecutionService(
+      {
+        now: NOW,
+        systemState: buildSystemState(),
+        optimizerOutput: {
+          ...buildOptimizerOutput(false),
+          decisions: [
+            {
+              decisionId: "decision-battery",
+              startAt: "2026-03-16T10:00:00.000Z",
+              endAt: "2026-03-16T10:30:00.000Z",
+              executionWindow: {
+                startAt: "2026-03-16T10:00:00.000Z",
+                endAt: "2026-03-16T10:30:00.000Z",
+              },
+              action: "charge_battery",
+              targetDeviceIds: ["battery-1"],
+              targetDevices: [{ deviceId: "battery-1", kind: "battery" }],
+              reason: "Cheap import window",
+              confidence: 0.9,
+            },
+            {
+              decisionId: "decision-ev",
+              startAt: "2026-03-16T10:00:00.000Z",
+              endAt: "2026-03-16T10:30:00.000Z",
+              executionWindow: {
+                startAt: "2026-03-16T10:00:00.000Z",
+                endAt: "2026-03-16T10:30:00.000Z",
+              },
+              action: "charge_ev",
+              targetDeviceIds: ["ev-1"],
+              targetDevices: [{ deviceId: "ev-1", kind: "ev_charger" }],
+              reason: "EV charging window",
+              confidence: 0.9,
+            },
+          ],
+          recommendedCommands: [
+            {
+              commandId: "cmd-battery-1",
+              deviceId: "battery-1",
+              issuedAt: NOW,
+              type: "set_mode",
+              mode: "charge",
+              effectiveWindow: {
+                startAt: "2026-03-16T10:00:00.000Z",
+                endAt: "2026-03-16T10:30:00.000Z",
+              },
+            },
+            {
+              commandId: "cmd-ev-1",
+              deviceId: "ev-1",
+              issuedAt: NOW,
+              type: "schedule_window",
+              window: {
+                startAt: "2026-03-16T10:00:00.000Z",
+                endAt: "2026-03-16T10:30:00.000Z",
+              },
+              targetMode: "charge",
+              effectiveWindow: {
+                startAt: "2026-03-16T10:00:00.000Z",
+                endAt: "2026-03-16T10:30:00.000Z",
+              },
+            },
+          ],
+        },
+      },
+      executor,
+      undefined,
+      undefined,
+      journal,
+      buildCycleFinancialCtx({ mode: "balanced", savingsPence: 17 }),
+      guardrail,
+      "continuous_live_strict",
+      { cycleId: "cycle-multi-action-1" },
+    );
+
+    const hb = journal.getCycleHeartbeats()[0];
+    expect(hb.executionPosture).toBe("normal");
+    expect(hb.commandsIssued).toBe(2);
+    expect(hb.commandsSkipped).toBe(0);
+    expect(hb.commandsFailed).toBe(0);
+    expect(hb.commandsSuppressed).toBe(0);
+    expect(hb.economicSnapshot?.hasValueSeekingDecisions).toBe(true);
+    expect(journal.getAll()).toHaveLength(2);
+  });
 });
 
 describe("cycle economic snapshot", () => {

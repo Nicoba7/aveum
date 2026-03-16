@@ -7,6 +7,7 @@ import type {
   OptimizerDecisionTarget,
   OptimizerDiagnostic,
   OptimizerInput,
+  OptimizerOpportunity,
   OptimizationMode,
   OptimizerSummary,
   TimeWindow,
@@ -29,6 +30,7 @@ export interface CanonicalRuntimeResult {
   headline: string;
   decisions: OptimizerDecision[];
   recommendedCommands: DeviceCommand[];
+  opportunities: OptimizerOpportunity[];
   summary: OptimizerSummary;
   diagnostics: OptimizerDiagnostic[];
   planningInputCoverage: PlanningInputCoverage;
@@ -283,10 +285,20 @@ function buildModePolicy(mode: OptimizationMode): ModePolicy {
   };
 }
 
-function requiredCapabilitiesForAction(action: OptimizerDecision["action"]): DeviceCapability[] {
-  if (action === "charge_ev") return ["schedule_window"];
-  if (action === "charge_battery" || action === "discharge_battery" || action === "export_to_grid") {
-    return ["set_mode"];
+function requiredCapabilitiesForTarget(
+  action: OptimizerDecision["action"],
+  kind: OptimizerDecisionTarget["kind"],
+): DeviceCapability[] {
+  if (action === "charge_ev") {
+    return kind === "ev_charger" ? ["schedule_window"] : [];
+  }
+
+  if (action === "charge_battery" || action === "discharge_battery") {
+    return kind === "battery" ? ["set_mode"] : [];
+  }
+
+  if (action === "export_to_grid") {
+    return kind === "battery" || kind === "solar_inverter" ? ["set_mode"] : [];
   }
 
   return [];
@@ -297,12 +309,12 @@ function mapDecisionTargets(
   action: OptimizerDecision["action"],
   input: OptimizerInput,
 ): OptimizerDecisionTarget[] {
-  const requiredCapabilities = requiredCapabilitiesForAction(action);
-
   return targetDeviceIds.map((deviceId) => {
     const matchedDevice = input.systemState.devices.find(
       (device) => device.deviceId === deviceId,
     );
+
+    const requiredCapabilities = requiredCapabilitiesForTarget(action, matchedDevice?.kind);
 
     return {
       deviceId,
@@ -338,68 +350,144 @@ function buildHeadline(decisions: OptimizerDecision[]): string {
   return "Gridly is matching live demand with available solar generation.";
 }
 
-function buildCommands(decisions: OptimizerDecision[], generatedAt: string, planId: string): DeviceCommand[] {
+function resolveDispatchTargetDeviceIds(
+  decision: OptimizerDecision,
+  input: OptimizerInput,
+): string[] {
+  const deviceById = new Map(input.systemState.devices.map((device) => [device.deviceId, device]));
+
+  return Array.from(new Set(decision.targetDeviceIds)).filter((deviceId) => {
+    const device = deviceById.get(deviceId);
+    const kind = device?.kind;
+
+    if (decision.action === "charge_battery" || decision.action === "discharge_battery") {
+      return kind === "battery" && Boolean(device?.capabilities.includes("set_mode"));
+    }
+
+    if (decision.action === "charge_ev") {
+      return kind === "ev_charger" && Boolean(device?.capabilities.includes("schedule_window"));
+    }
+
+    if (decision.action === "export_to_grid") {
+      return (kind === "battery" || kind === "solar_inverter") && Boolean(device?.capabilities.includes("set_mode"));
+    }
+
+    return false;
+  });
+}
+
+function buildCommands(
+  decisions: OptimizerDecision[],
+  generatedAt: string,
+  planId: string,
+  input: OptimizerInput,
+): { commands: DeviceCommand[]; opportunities: OptimizerOpportunity[] } {
   const commands: DeviceCommand[] = [];
+  const opportunities: OptimizerOpportunity[] = [];
+
+  function pushOpportunity(
+    decision: OptimizerDecision,
+    targetDeviceId: string,
+    command: DeviceCommand,
+    targetIndex: number,
+  ): void {
+    const matchedTarget = decision.targetDevices?.find((target) => target.deviceId === targetDeviceId);
+
+    opportunities.push({
+      opportunityId: `${decision.decisionId}:${targetDeviceId}:${command.type}:${targetIndex}`,
+      decisionId: decision.decisionId,
+      action: decision.action,
+      targetDeviceId,
+      targetKind: matchedTarget?.kind,
+      requiredCapabilities: matchedTarget?.requiredCapabilities,
+      command,
+      economicSignals: {
+        effectiveStoredEnergyValuePencePerKwh: decision.effectiveStoredEnergyValuePencePerKwh,
+        netStoredEnergyValuePencePerKwh: decision.netStoredEnergyValuePencePerKwh,
+        marginalImportAvoidancePencePerKwh: decision.marginalImportAvoidancePencePerKwh,
+        exportValuePencePerKwh: decision.marginalExportValuePencePerKwh,
+      },
+      planningConfidenceLevel: decision.planningConfidenceLevel,
+      conservativeAdjustmentApplied: decision.conservativeAdjustmentApplied,
+      conservativeAdjustmentReason: decision.conservativeAdjustmentReason,
+      decisionReason: decision.reason,
+    });
+  }
 
   decisions.forEach((decision, index) => {
-    const primaryTargetDeviceId = decision.targetDeviceIds[0];
-    if (!primaryTargetDeviceId) {
+    const dispatchTargets = resolveDispatchTargetDeviceIds(decision, input);
+    if (!dispatchTargets.length) {
       return;
     }
 
-    if (decision.action === "charge_battery") {
-      commands.push({
-        commandId: `${planId}-battery-${index}`,
-        deviceId: primaryTargetDeviceId,
-        issuedAt: generatedAt,
-        type: "set_mode",
-        mode: "charge",
-        effectiveWindow: { startAt: decision.startAt, endAt: decision.endAt },
-        reason: decision.reason,
-      });
-    } else if (decision.action === "discharge_battery") {
-      commands.push({
-        commandId: `${planId}-discharge-${index}`,
-        deviceId: primaryTargetDeviceId,
-        issuedAt: generatedAt,
-        type: "set_mode",
-        mode: "discharge",
-        effectiveWindow: { startAt: decision.startAt, endAt: decision.endAt },
-        reason: decision.reason,
-      });
-    } else if (decision.action === "export_to_grid") {
-      commands.push({
-        commandId: `${planId}-export-${index}`,
-        deviceId: primaryTargetDeviceId,
-        issuedAt: generatedAt,
-        type: "set_mode",
-        mode: "export",
-        effectiveWindow: { startAt: decision.startAt, endAt: decision.endAt },
-        reason: decision.reason,
-      });
-    } else if (decision.action === "charge_ev") {
-      commands.push({
-        commandId: `${planId}-ev-${index}`,
-        deviceId: primaryTargetDeviceId,
-        issuedAt: generatedAt,
-        type: "schedule_window",
-        window: { startAt: decision.startAt, endAt: decision.endAt },
-        targetMode: "charge",
-        effectiveWindow: { startAt: decision.startAt, endAt: decision.endAt },
-        reason: decision.reason,
-      });
-    }
+    dispatchTargets.forEach((targetDeviceId, targetIndex) => {
+      if (decision.action === "charge_battery") {
+        const command: DeviceCommand = {
+          commandId: `${planId}-battery-${index}-${targetIndex}`,
+          deviceId: targetDeviceId,
+          issuedAt: generatedAt,
+          type: "set_mode",
+          mode: "charge",
+          effectiveWindow: { startAt: decision.startAt, endAt: decision.endAt },
+          reason: decision.reason,
+        };
+        commands.push(command);
+        pushOpportunity(decision, targetDeviceId, command, targetIndex);
+      } else if (decision.action === "discharge_battery") {
+        const command: DeviceCommand = {
+          commandId: `${planId}-discharge-${index}-${targetIndex}`,
+          deviceId: targetDeviceId,
+          issuedAt: generatedAt,
+          type: "set_mode",
+          mode: "discharge",
+          effectiveWindow: { startAt: decision.startAt, endAt: decision.endAt },
+          reason: decision.reason,
+        };
+        commands.push(command);
+        pushOpportunity(decision, targetDeviceId, command, targetIndex);
+      } else if (decision.action === "export_to_grid") {
+        const command: DeviceCommand = {
+          commandId: `${planId}-export-${index}-${targetIndex}`,
+          deviceId: targetDeviceId,
+          issuedAt: generatedAt,
+          type: "set_mode",
+          mode: "export",
+          effectiveWindow: { startAt: decision.startAt, endAt: decision.endAt },
+          reason: decision.reason,
+        };
+        commands.push(command);
+        pushOpportunity(decision, targetDeviceId, command, targetIndex);
+      } else if (decision.action === "charge_ev") {
+        const command: DeviceCommand = {
+          commandId: `${planId}-ev-${index}-${targetIndex}`,
+          deviceId: targetDeviceId,
+          issuedAt: generatedAt,
+          type: "schedule_window",
+          window: { startAt: decision.startAt, endAt: decision.endAt },
+          targetMode: "charge",
+          effectiveWindow: { startAt: decision.startAt, endAt: decision.endAt },
+          reason: decision.reason,
+        };
+        commands.push(command);
+        pushOpportunity(decision, targetDeviceId, command, targetIndex);
+      }
+    });
   });
 
-  return commands;
+  return { commands, opportunities };
 }
 
-function findPrimaryDeviceId(input: OptimizerInput, kind: "battery" | "ev_charger" | "solar_inverter" | "smart_meter"): string | undefined {
-  return input.systemState.devices.find(
-    (device) =>
-      device.kind === kind &&
-      (device.connectionStatus === "online" || device.connectionStatus === "degraded"),
-  )?.deviceId;
+function findDeviceIdsByKind(
+  input: OptimizerInput,
+  kind: "battery" | "ev_charger" | "solar_inverter" | "smart_meter",
+): string[] {
+  return input.systemState.devices
+    .filter(
+      (device) =>
+        device.kind === kind &&
+        (device.connectionStatus === "online" || device.connectionStatus === "degraded"),
+    )
+    .map((device) => device.deviceId);
 }
 
 function buildDiagnostics(
@@ -504,16 +592,16 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
   const planId = toPlanId(input.systemState.siteId, generatedAt, input.constraints.mode, horizonStartAt, horizonEndAt);
   const slotHours = input.forecasts.slotDurationMinutes / 60;
   const modePolicy = buildModePolicy(input.constraints.mode);
-  const batteryDeviceId = findPrimaryDeviceId(input, "battery");
-  const evChargerDeviceId = findPrimaryDeviceId(input, "ev_charger");
-  const solarDeviceId = findPrimaryDeviceId(input, "solar_inverter");
-  const gridDeviceId = findPrimaryDeviceId(input, "smart_meter");
+  const batteryDeviceIds = findDeviceIdsByKind(input, "battery");
+  const evChargerDeviceIds = findDeviceIdsByKind(input, "ev_charger");
+  const solarDeviceIds = findDeviceIdsByKind(input, "solar_inverter");
+  const gridDeviceIds = findDeviceIdsByKind(input, "smart_meter");
 
-  const hasBattery = Boolean(batteryDeviceId);
+  const hasBattery = batteryDeviceIds.length > 0;
   const hasEv =
     input.constraints.allowAutomaticEvCharging &&
     Boolean(input.systemState.evConnected) &&
-    Boolean(evChargerDeviceId);
+    evChargerDeviceIds.length > 0;
 
   const importRates = input.tariffSchedule.importRates;
   const exportRates = input.tariffSchedule.exportRates ?? [];
@@ -606,18 +694,18 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       reason = "Solar surplus and favorable export pricing support grid export.";
       expectedImportKwh = 0;
       expectedExportKwh = solarSurplusKwh;
-      targetDeviceIds = [batteryDeviceId, gridDeviceId].filter((deviceId): deviceId is string => Boolean(deviceId));
+      targetDeviceIds = [...batteryDeviceIds, ...solarDeviceIds, ...gridDeviceIds];
     } else if (solarKwh >= loadKwh * 0.9) {
       action = "consume_solar";
       reason = "Solar generation can cover most current demand.";
       expectedImportKwh = Math.max(0, loadKwh - solarKwh);
-      targetDeviceIds = solarDeviceId ? [solarDeviceId] : [];
+      targetDeviceIds = [...solarDeviceIds];
     } else if (shouldChargeEv) {
       action = "charge_ev";
       reason = "Charging EV during a lower-cost import window.";
       const evChargeKwh = Math.min(2.0 * slotHours, Math.max(0, ((input.constraints.evTargetSocPercent ?? 85) - (evSoc ?? 0)) / 100 * evCapacityKwh));
       expectedImportKwh = Math.max(0, loadKwh - solarKwh) + evChargeKwh;
-      targetDeviceIds = evChargerDeviceId ? [evChargerDeviceId] : [];
+      targetDeviceIds = [...evChargerDeviceIds];
       if (evSoc !== undefined && evChargeKwh > 0) {
         evSoc = clamp(evSoc + (evChargeKwh / evCapacityKwh) * 100, 0, 100);
       }
@@ -641,7 +729,7 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       const batteryChargeKwh = Math.min(1.6 * slotHours, ((100 - batterySoc) / 100) * batteryCapacityKwh);
       if (action === "charge_battery") {
         expectedImportKwh = Math.max(0, loadKwh - solarKwh) + batteryChargeKwh;
-        targetDeviceIds = batteryDeviceId ? [batteryDeviceId] : [];
+        targetDeviceIds = [...batteryDeviceIds];
         batterySoc = clamp(batterySoc + (batteryChargeKwh / batteryCapacityKwh) * 100, 0, 100);
         batteryThroughputKwh += batteryChargeKwh;
       }
@@ -664,7 +752,7 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       const dischargeKwh = Math.min(1.4 * slotHours, ((batterySoc - batteryReserve) / 100) * batteryCapacityKwh);
       if (action === "discharge_battery") {
         expectedImportKwh = Math.max(0, loadKwh - solarKwh - dischargeKwh);
-        targetDeviceIds = batteryDeviceId ? [batteryDeviceId] : [];
+        targetDeviceIds = [...batteryDeviceIds];
         batterySoc = clamp(batterySoc - (dischargeKwh / batteryCapacityKwh) * 100, batteryReserve, 100);
         batteryThroughputKwh += dischargeKwh;
         expectedBatteryDegradationCostPence += dischargeKwh * batteryDegradationCostPencePerKwh;
@@ -679,7 +767,7 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       action = "consume_solar";
       reason = `Holding export aggressiveness because planning confidence is ${conservatismPolicy.planningConfidenceLevel} with partial export tariff coverage.`;
       expectedExportKwh = 0;
-      targetDeviceIds = solarDeviceId ? [solarDeviceId] : [];
+      targetDeviceIds = [...solarDeviceIds];
       expectedImportKwh = Math.max(0, loadKwh - solarKwh);
     }
 
@@ -789,6 +877,8 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
     blockingCodes: decisions.length > 0 ? undefined : ["NO_DECISION_SLOTS"],
   };
 
+  const executionArtifacts = buildCommands(decisions, generatedAt, planId, input);
+
   return {
     schemaVersion: "optimizer-output.v1.1",
     plannerVersion: "canonical-runtime.v1",
@@ -800,7 +890,8 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
     feasibility,
     headline,
     decisions,
-    recommendedCommands: buildCommands(decisions, generatedAt, planId),
+    recommendedCommands: executionArtifacts.commands,
+    opportunities: executionArtifacts.opportunities,
     summary: {
       expectedImportCostPence: Math.round(expectedImportCostPence),
       expectedExportRevenuePence: Math.round(expectedExportRevenuePence),

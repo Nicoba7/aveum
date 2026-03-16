@@ -1,6 +1,9 @@
 import type { CanonicalDeviceCommand } from "../application/controlLoopExecution/canonicalCommand";
 import type { CommandAcknowledgementStatus } from "../application/controlLoopExecution/projectExecutionOutcome";
-import type { CommandExecutionStatus } from "../application/controlLoopExecution/types";
+import type {
+  CommandExecutionStatus,
+  ExecutionEconomicArbitrationTrace,
+} from "../application/controlLoopExecution/types";
 import type { RuntimeExecutionPosture } from "../application/controlLoopExecution/executionPolicyTypes";
 import type { PlanFreshnessStatus, ReplanTrigger } from "../application/continuousLoop/controlLoopRunnerTypes";
 import type { OptimizationMode, PlanningConfidenceLevel } from "../domain";
@@ -129,16 +132,20 @@ export interface CycleHeartbeatEntry {
  */
 export interface ExecutionJournalEntry {
   entryId: string;
+  cycleId?: string;
   recordedAt: string;
+  opportunityId?: string;
   decisionId?: string;
   executionRequestId: string;
   idempotencyKey: string;
   targetDeviceId: string;
   canonicalCommand: CanonicalDeviceCommand;
   status: CommandExecutionStatus;
+  executionError?: string;
   acknowledgementStatus?: CommandAcknowledgementStatus;
   reasonCodes?: string[];
   stage?: "preflight_validation" | "reconciliation" | "dispatch";
   cycleFinancialContext?: ExecutionCycleFinancialContext;
+  economicArbitration?: ExecutionEconomicArbitrationTrace;
   schemaVersion: string;
 }
