@@ -1,9 +1,11 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { optimizePlan } from "../engine/core/optimizePlan";
-import { explainPlan } from "../engine/core/explainPlan";
-import { mapEngineToHome } from "../features/home/mapEngineToHome";
+import {
+  buildHomeOptimizerInput,
+  buildHomeUiViewModel,
+  optimize,
+  type HomeConnectedDeviceId,
+} from "../optimizer";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { buildDayPlan } from "../lib/dayPlanner";
 import { AGILE_RATES } from "../data/agileRates";
 import {
   SANDBOX,
@@ -283,7 +285,7 @@ export function deriveHomeTimelineEmphasis(
 }
 
 export function mergeTimeline(
-  timeline: any[],
+  timeline: Array<{ slot: number; action: string; reason?: string | null }>,
   context: {
     solarForecastKwh: number;
     currentPence: number;
@@ -645,38 +647,49 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
 
   const slotIndex = Math.min(Math.floor((now.getHours() * 60 + now.getMinutes()) / 30), 47);
   const currentPence = AGILE_RATES[slotIndex].pence;
+  const connectedDeviceIds = useMemo(() => {
+    const allowed = new Set<HomeConnectedDeviceId>(["solar", "battery", "ev", "grid"]);
+    return connectedDevices
+      .map((device) => device.id)
+      .filter((id): id is HomeConnectedDeviceId => allowed.has(id as HomeConnectedDeviceId));
+  }, [connectedDevices]);
 
-  const engineInput = {
-    batterySocPercent: s.batteryPct,
-    forecastLoadKwh: Array.from({ length: 8 }, () => Math.max((s.homeW ?? 1200) / 2000, 0.4)),
-    forecastSolarKwh: Array.from({ length: 8 }, (_, i) => {
-      if (!hasSolar) return 0;
-      if (i >= 2 && i <= 4) return 2.8;
-      if (i === 1 || i === 5) return 1.4;
-      return 0.4;
-    }),
-    importPrice: Array.from({ length: 8 }, (_, i) => Math.max(0.05, (currentPence + i * 0.01) / 100)),
-    exportPrice: Array.from({ length: 8 }, (_, i) => Math.max(0.05, (currentPence + i * 0.015) / 100)),
-  };
+  const optimizerInput = useMemo(() => {
+    return buildHomeOptimizerInput({
+      now,
+      connectedDeviceIds,
+      rates: AGILE_RATES,
+      planningMode: "balanced",
+      batteryStartPct: s.batteryPct,
+      batteryCapacityKwh: 13.5,
+      batteryReservePct: 30,
+      maxBatteryCyclesPerDay: 2,
+      evReadyBy: "07:00",
+      evTargetSocPercent: 85,
+      solarForecastKwh: SANDBOX?.solarForecast?.kwh,
+      carbonIntensity: SANDBOX?.carbonIntensity,
+      exportPriceRatio: 0.72,
+    });
+  }, [now, connectedDeviceIds, s.batteryPct]);
 
-  const engineOutput = optimizePlan(engineInput);
-  const timeline = mergeTimeline(engineOutput.timeline || [], {
+  const optimizerOutput = useMemo(() => optimize(optimizerInput), [optimizerInput]);
+  const homeOptimizerView = useMemo(() => buildHomeUiViewModel(optimizerOutput), [optimizerOutput]);
+
+  const timeline = mergeTimeline(homeOptimizerView.timeline, {
     solarForecastKwh: SANDBOX?.solarForecast?.kwh ?? 0,
     currentPence,
     hasEV,
-  }, slotIndex, slotIndex);
-  const homeView = mapEngineToHome(engineOutput);
-  const explanation = explainPlan(engineOutput);
+  }, slotIndex);
   const [selectedTimelineItem, setSelectedTimelineItem] = useState<TimelineItem | null>(null);
-  const primaryRecommendation = engineOutput.recommendations[0];
-  const isCharging = primaryRecommendation?.action === "charge";
-  const isExporting = primaryRecommendation?.action === "export";
+  const isCharging = homeOptimizerView.currentAction === "charge";
+  const isExporting = homeOptimizerView.currentAction === "export";
+  const hasOptimizerWarnings = homeOptimizerView.health.systemStatus !== "ok";
 
   const heroColor = isCharging ? "#22C55E" : isExporting ? "#F59E0B" : "#6B7280";
   const heroLabel = conciseHeroHeadline();
   const heroReason = buildHeroDecisionReason({
-    action: primaryRecommendation?.action,
-    reason: homeView.subheadline ?? explanation.shortReason,
+    action: homeOptimizerView.currentAction,
+    reason: homeOptimizerView.currentReason,
     currentPence,
   });
   const hasDeviceAlerts = connectedDevices.some((device) => {
@@ -698,34 +711,16 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
     isCharging,
     isExporting,
   });
-
-  const planner = useMemo(() => {
-    const pricesPence = AGILE_RATES.map((rate) => rate.pence);
-    const loadKwh = AGILE_RATES.map((_, i) => {
-      const hour = Math.floor(i / 2);
-      if (hour >= 17 && hour <= 21) return 0.95;
-      if (hour >= 6 && hour <= 8) return 0.75;
-      return 0.55;
-    });
-    const solarKwh = AGILE_RATES.map((_, i) => Number((Math.max(0, 1 - Math.abs(i / 2 - 13) / 5) * 0.8).toFixed(2)));
-
-    return buildDayPlan({
-      pricesPence,
-      loadKwh,
-      solarKwh,
-      currentSlot: slotIndex,
-      batteryCapacityKwh: 13.5,
-      socStartKwh: (s.batteryPct / 100) * 13.5,
-      minReserveKwh: 0.2 * 13.5,
-      maxChargePerSlotKwh: 2.7,
-      maxDischargePerSlotKwh: 2.7,
-      chargeEfficiency: 0.92,
-      dischargeEfficiency: 0.92,
-      exportEnabled: hasGrid,
-    });
-  }, [slotIndex, s.batteryPct, hasGrid]);
-
-  void planner;
+  const homeValueSavings = homeOptimizerView.value.savingsToday > 0
+    ? homeOptimizerView.value.savingsToday
+    : SANDBOX.savedToday;
+  const homeValueEarnings = homeOptimizerView.value.earningsToday > 0
+    ? homeOptimizerView.value.earningsToday
+    : SANDBOX.earnedToday;
+  const confidenceBadge = hasDeviceAlerts || hasOptimizerWarnings
+    ? "Confidence: Reduced"
+    : `Confidence: ${homeOptimizerView.trust.confidenceLabel}`;
+  const confidenceCopy = `${homeOptimizerView.trust.explanation} ${homeOptimizerView.nextStepLabel}`;
 
   return (
     <div style={{ background: "#060A12", minHeight: "100vh", paddingBottom: 40 }}>
@@ -736,7 +731,7 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
             <div style={{ width: 6, height: 6, borderRadius: "50%", background: heroColor, boxShadow: `0 0 8px ${heroColor}, 0 0 16px ${heroColor}50` }} />
             <span style={{ fontSize: 11, color: "#4B5563", fontWeight: 600, letterSpacing: 0.8 }}>QUIETLY IN CONTROL</span>
             <span style={{ fontSize: 10, color: "#7B8EA8", marginLeft: "auto", border: "1px solid #1D2B40", borderRadius: 999, padding: "2px 8px" }}>
-              {hasDeviceAlerts ? "Confidence: Reduced" : "Confidence: High"}
+              {confidenceBadge}
             </span>
           </div>
 
@@ -747,12 +742,12 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
           <div style={{ display: "flex", gap: 18, borderTop: "1px solid #162235", paddingTop: 12 }}>
             <div>
               <div style={{ fontSize: 10, color: "#506077", fontWeight: 600, letterSpacing: 0.6, marginBottom: 3 }}>SAVED BY GRIDLY TODAY</div>
-              <div style={{ fontSize: 19, fontWeight: 800, color: "#22C55E", letterSpacing: -0.5 }}>+£{SANDBOX.savedToday}</div>
+              <div style={{ fontSize: 19, fontWeight: 800, color: "#22C55E", letterSpacing: -0.5 }}>+£{homeValueSavings}</div>
             </div>
-            {SANDBOX.earnedToday > 0 && (
+            {homeValueEarnings > 0 && (
               <div>
                 <div style={{ fontSize: 10, color: "#506077", fontWeight: 600, letterSpacing: 0.6, marginBottom: 3 }}>EARNED BY GRIDLY TODAY</div>
-                <div style={{ fontSize: 19, fontWeight: 800, color: "#F59E0B", letterSpacing: -0.5 }}>+£{SANDBOX.earnedToday}</div>
+                <div style={{ fontSize: 19, fontWeight: 800, color: "#F59E0B", letterSpacing: -0.5 }}>+£{homeValueEarnings}</div>
               </div>
             )}
             <div style={{ marginLeft: "auto" }}>
@@ -853,7 +848,7 @@ export default function HomeTab({ connectedDevices, now }: { connectedDevices: D
 
       <div style={{ margin: "12px 16px 0", background: "#0A1220", borderRadius: 16, border: "1px solid #18263D", padding: "11px 14px" }}>
         <div style={{ fontSize: 10, color: "#7B8EA8", fontWeight: 700, letterSpacing: 0.75, marginBottom: 4 }}>SYSTEM CONFIDENCE</div>
-        <div style={{ fontSize: 12, color: "#A5B4C7", lineHeight: 1.45 }}>{homeReassuranceNote}</div>
+        <div style={{ fontSize: 12, color: "#A5B4C7", lineHeight: 1.45 }}>{hasDeviceAlerts ? homeReassuranceNote : confidenceCopy}</div>
       </div>
 
       <SystemHealthCard connectedDevices={connectedDevices} deviceHealth={deviceHealth} />

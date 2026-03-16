@@ -1,6 +1,18 @@
 export { optimize } from "./engine";
 export { buildOptimizerExplanation, type OptimizerExplanation } from "./explain";
 export {
+  buildHomeOptimizerInput,
+  type HomeConnectedDeviceId,
+  type HomeOptimizerContextInput,
+  type HomeRate,
+} from "./homeInputAdapter";
+export {
+  buildHomeUiViewModel,
+  type HomeLegacyAction,
+  type HomeTimelineRow,
+  type HomeUiViewModel,
+} from "./homeUiAdapter";
+export {
   buildOptimizerInputFromLegacyPlanContext,
   type LegacyConnectedDeviceId,
   type LegacyPlanContextInput,
