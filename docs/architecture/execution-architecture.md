@@ -38,6 +38,18 @@ Canonical command request
 - Shadow update: updates device shadow only when acknowledgement projection marks the outcome as acknowledgement-sufficient.
 - Execution journal: records canonical execution history and reason codes across stages for traceability.
 
+## Execution Invariants
+
+The execution pipeline must preserve these architectural invariants:
+
+- `controlLoop.ts` remains pure and deterministic.
+- Capability validation always precedes reconciliation.
+- Reconciliation suppresses only high-confidence no-op commands; uncertain or mismatched cases continue to execution paths.
+- Execution policy is the final gate before dispatch and must be satisfied for dispatch to occur.
+- Shadow updates require acknowledgement-sufficient outcomes from acknowledgement projection.
+- Every execution outcome produces exactly one execution journal entry.
+- Shadow state (current system belief) and journal history (historical outcomes) remain separate concerns.
+
 ## Layer Responsibilities
 
 ### Optimizer
