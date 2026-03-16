@@ -1,4 +1,5 @@
 import type { ExecutionJournalEntry } from "../../journal/executionJournal";
+import type { ExecutionCycleFinancialContext } from "../../journal/executionJournal";
 import type { CanonicalDeviceCommand } from "./canonicalCommand";
 import type { CommandExecutionResult } from "./types";
 import { projectExecutionOutcome } from "./projectExecutionOutcome";
@@ -30,6 +31,9 @@ const POLICY_REASON_CODES = new Set([
   "NO_ACTIONABLE_DECISION",
   "CONFLICTING_COMMAND_FOR_DEVICE",
   "COMMAND_STALE",
+  "OBSERVED_STATE_MISSING",
+  "OBSERVED_STATE_STALE",
+  "OBSERVED_STATE_UNKNOWN",
   "POLICY_BLOCKED",
 ]);
 
@@ -58,6 +62,7 @@ export function toExecutionJournalEntry(
   canonicalCommand: CanonicalDeviceCommand,
   executionResult: CommandExecutionResult,
   recordedAt: string,
+  cycleFinancialContext?: ExecutionCycleFinancialContext,
 ): ExecutionJournalEntry {
   const outcomeProjection = projectExecutionOutcome(executionResult, canonicalCommand);
 
@@ -73,6 +78,7 @@ export function toExecutionJournalEntry(
     acknowledgementStatus: outcomeProjection.acknowledgementStatus,
     reasonCodes: executionResult.reasonCodes,
     stage: inferStage(executionResult.reasonCodes, executionResult.status),
+    cycleFinancialContext,
     schemaVersion: "execution-journal.v1",
   };
 }

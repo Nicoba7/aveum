@@ -1,5 +1,12 @@
 import type { ExecutionPolicyDecision, ExecutionPolicyEvaluationInput } from "./executionPolicyTypes";
 
+const FRESHNESS_GATED_HIGH_RISK_KINDS = new Set([
+  "start_charging",
+  "stop_charging",
+  "set_mode",
+  "set_power_limit",
+]);
+
 function toMillis(value: string): number {
   return new Date(value).getTime();
 }
@@ -64,6 +71,23 @@ export function evaluateExecutionPolicy(input: ExecutionPolicyEvaluationInput): 
 
   if (input.reservedDeviceIds?.has(input.request.targetDeviceId)) {
     reasonCodes.push("CONFLICTING_COMMAND_FOR_DEVICE");
+  }
+
+  const commandKind = input.request.canonicalCommand.kind;
+  const freshnessSummary = input.observedStateFreshness;
+
+  if (freshnessSummary && FRESHNESS_GATED_HIGH_RISK_KINDS.has(commandKind)) {
+    const deviceFreshness = freshnessSummary.devices.find(
+      (entry) => entry.deviceId === input.request.targetDeviceId,
+    );
+
+    if (!deviceFreshness || deviceFreshness.status === "missing") {
+      reasonCodes.push("OBSERVED_STATE_MISSING");
+    } else if (deviceFreshness.status === "stale") {
+      reasonCodes.push("OBSERVED_STATE_STALE");
+    } else if (deviceFreshness.status === "unknown") {
+      reasonCodes.push("OBSERVED_STATE_UNKNOWN");
+    }
   }
 
   return {

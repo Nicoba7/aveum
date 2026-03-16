@@ -5,6 +5,7 @@ import type {
   OptimizerDecisionTarget,
   OptimizerDiagnostic,
   OptimizerInput,
+  OptimizationMode,
   OptimizerSummary,
   TimeWindow,
 } from "../domain";
@@ -44,6 +45,53 @@ function average(values: number[]): number {
 
 function toPlanId(siteId: string, generatedAt: string): string {
   return `${siteId}-${generatedAt.replace(/[-:.TZ]/g, "")}`;
+}
+
+interface ModePolicy {
+  lowImportThresholdFactor: number;
+  highImportThresholdFactor: number;
+  evChargeThresholdFactor: number;
+  exportAttractivenessRatio: number;
+}
+
+/**
+ * Mode policy tunes the same planner mechanics toward each product objective
+ * without introducing a separate optimizer implementation per mode.
+ */
+function buildModePolicy(mode: OptimizationMode): ModePolicy {
+  if (mode === "cost") {
+    return {
+      lowImportThresholdFactor: 0.95,
+      highImportThresholdFactor: 1.05,
+      evChargeThresholdFactor: 1,
+      exportAttractivenessRatio: 0.8,
+    };
+  }
+
+  if (mode === "carbon") {
+    return {
+      lowImportThresholdFactor: 0.9,
+      highImportThresholdFactor: 1.1,
+      evChargeThresholdFactor: 1.1,
+      exportAttractivenessRatio: 1,
+    };
+  }
+
+  if (mode === "self_consumption") {
+    return {
+      lowImportThresholdFactor: 0.88,
+      highImportThresholdFactor: 1.12,
+      evChargeThresholdFactor: 0.95,
+      exportAttractivenessRatio: 1.2,
+    };
+  }
+
+  return {
+    lowImportThresholdFactor: 0.85,
+    highImportThresholdFactor: 1.15,
+    evChargeThresholdFactor: 1,
+    exportAttractivenessRatio: 0.9,
+  };
 }
 
 function requiredCapabilitiesForAction(action: OptimizerDecision["action"]): DeviceCapability[] {
@@ -161,6 +209,11 @@ function buildDiagnostics(input: OptimizerInput, decisions: OptimizerDecision[])
       severity: "info",
     },
     {
+      code: "MODE_OBJECTIVE_ACTIVE",
+      message: `Planner objective '${input.constraints.mode}' is actively shaping action thresholds.`,
+      severity: "info",
+    },
+    {
       code: "HORIZON_SLOTS",
       message: `Computed ${decisions.length} canonical decision slots for this planning horizon.`,
       severity: "info",
@@ -200,6 +253,7 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
   const planId = toPlanId(input.systemState.siteId, generatedAt);
   const slotCount = input.tariffSchedule.importRates.length;
   const slotHours = input.forecasts.slotDurationMinutes / 60;
+  const modePolicy = buildModePolicy(input.constraints.mode);
 
   const hasBattery = input.systemState.devices.some(
     (device) =>
@@ -218,8 +272,8 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
   const importRates = input.tariffSchedule.importRates;
   const exportRates = input.tariffSchedule.exportRates ?? [];
   const avgImportRate = average(importRates.map((rate) => rate.unitRatePencePerKwh));
-  const lowImportThreshold = avgImportRate * 0.85;
-  const highImportThreshold = avgImportRate * 1.15;
+  const lowImportThreshold = avgImportRate * modePolicy.lowImportThresholdFactor;
+  const highImportThreshold = avgImportRate * modePolicy.highImportThresholdFactor;
 
   let batterySoc = input.systemState.batterySocPercent ?? 50;
   const batteryCapacityKwh = input.systemState.batteryCapacityKwh ?? 10;
@@ -266,9 +320,11 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       hasEv &&
       evSoc !== undefined &&
       evSoc < (input.constraints.evTargetSocPercent ?? 85) &&
-      importRate <= avgImportRate;
+      importRate <= avgImportRate * modePolicy.evChargeThresholdFactor;
 
-    if (solarSurplusKwh > 0.05 && input.constraints.allowBatteryExport && exportRate >= importRate * 0.9) {
+    const exportAttractiveEnough = exportRate >= importRate * modePolicy.exportAttractivenessRatio;
+
+    if (solarSurplusKwh > 0.05 && input.constraints.allowBatteryExport && exportAttractiveEnough) {
       action = "export_to_grid";
       reason = "Solar surplus and favorable export pricing support grid export.";
       expectedImportKwh = 0;
@@ -364,6 +420,7 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
   const assumptions: string[] = [
     "Tariff rates are treated as fixed for the planned horizon.",
     "Forecast confidence is aggregated into heuristic per-slot confidence scores.",
+    "Optimization mode adjusts economic action thresholds in the canonical runtime planner.",
   ];
 
   if (!input.tariffSchedule.exportRates?.length) {

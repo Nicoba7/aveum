@@ -216,6 +216,68 @@ describe("runControlLoopExecutionService journal", () => {
     expect(entries[0].acknowledgementStatus).toBe("acknowledged");
   });
 
+  it("records cycle financial context including value ledger", async () => {
+    const execute = vi.fn(async (requests: CommandExecutionRequest[]) =>
+      requests.map((request): CommandExecutionResult => ({
+        executionRequestId: request.executionRequestId,
+        requestId: request.requestId,
+        idempotencyKey: request.idempotencyKey,
+        decisionId: request.decisionId,
+        targetDeviceId: request.targetDeviceId,
+        commandId: request.commandId,
+        deviceId: request.targetDeviceId,
+        status: "issued",
+      })),
+    );
+    const executor: DeviceCommandExecutor = { execute };
+    const journal = new InMemoryExecutionJournalStore();
+
+    await runControlLoopExecutionService(
+      {
+        now: "2026-03-16T10:05:00.000Z",
+        systemState: buildSystemState(),
+        optimizerOutput: buildOutput([
+          {
+            commandId: "cmd-1",
+            deviceId: "battery",
+            issuedAt: "2026-03-16T10:00:00.000Z",
+            type: "set_mode",
+            mode: "charge",
+            effectiveWindow: { startAt: "2026-03-16T10:00:00.000Z", endAt: "2026-03-16T10:30:00.000Z" },
+          },
+        ]),
+      },
+      executor,
+      buildCapabilitiesProvider(),
+      undefined,
+      journal,
+      {
+        optimizationMode: "cost",
+        valueLedger: {
+          optimizationMode: "cost",
+          estimatedImportCostPence: 120,
+          estimatedExportRevenuePence: 40,
+          estimatedNetCostPence: 80,
+          baselineType: "hold_current_state",
+          baselineNetCostPence: 100,
+          baselineImportCostPence: 110,
+          baselineExportRevenuePence: 10,
+          estimatedSavingsVsBaselinePence: 20,
+          assumptions: ["test assumption"],
+          caveats: [],
+          confidence: 0.8,
+        },
+      },
+    );
+
+    const entries = journal.getAll();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].cycleFinancialContext?.optimizationMode).toBe("cost");
+    expect(entries[0].cycleFinancialContext?.valueLedger.estimatedSavingsVsBaselinePence).toBe(20);
+    expect(entries[0].cycleFinancialContext?.decisionsTaken).toHaveLength(1);
+    expect(entries[0].cycleFinancialContext?.decisionsTaken[0]?.decisionId).toBe("decision-1");
+  });
+
   it("records journal entry for failed dispatch", async () => {
     const execute = vi.fn(async (requests: CommandExecutionRequest[]) =>
       requests.map((request): CommandExecutionResult => ({

@@ -69,7 +69,7 @@ function buildCapabilitiesProvider() {
   return new InMemoryDeviceCapabilitiesProvider([
     {
       deviceId: "battery",
-      supportedCommandKinds: ["set_mode", "schedule_window"],
+      supportedCommandKinds: ["set_mode", "schedule_window", "refresh_state"],
       supportedModes: ["charge", "discharge"],
       minimumCommandWindowMinutes: 5,
       supportsOverlappingWindows: true,
@@ -252,6 +252,79 @@ describe("runControlLoopExecutionService policy", () => {
             effectiveWindow: { startAt: "2026-03-16T10:00:00.000Z", endAt: "2026-03-16T10:30:00.000Z" },
           },
         ]),
+      },
+      executor,
+      buildCapabilitiesProvider(),
+    );
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result.executionResults[0].status).toBe("issued");
+  });
+
+  it("denies high-risk command when observed state freshness is stale", async () => {
+    const { executor, execute } = buildExecutor();
+
+    const result = await runControlLoopExecutionService(
+      {
+        now: "2026-03-16T10:05:00.000Z",
+        systemState: buildSystemState(),
+        optimizerOutput: buildOutput([
+          {
+            commandId: "cmd-1",
+            deviceId: "battery",
+            issuedAt: "2026-03-16T10:00:00.000Z",
+            type: "set_mode",
+            mode: "charge",
+            effectiveWindow: { startAt: "2026-03-16T10:00:00.000Z", endAt: "2026-03-16T10:30:00.000Z" },
+          },
+        ]),
+        observedStateFreshness: {
+          capturedAt: "2026-03-16T10:05:00.000Z",
+          maxAgeSeconds: 60,
+          overallStatus: "stale",
+          counts: { fresh: 0, stale: 1, missing: 0, unknown: 0 },
+          devices: [
+            {
+              deviceId: "battery",
+              status: "stale",
+              lastTelemetryAt: "2026-03-16T10:00:00.000Z",
+              ageSeconds: 300,
+            },
+          ],
+        },
+      },
+      executor,
+      buildCapabilitiesProvider(),
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.executionResults[0].status).toBe("skipped");
+    expect(result.executionResults[0].reasonCodes).toContain("OBSERVED_STATE_STALE");
+  });
+
+  it("allows low-risk refresh_state command even when observed state freshness is stale", async () => {
+    const { executor, execute } = buildExecutor();
+
+    const result = await runControlLoopExecutionService(
+      {
+        now: "2026-03-16T10:05:00.000Z",
+        systemState: buildSystemState(),
+        optimizerOutput: buildOutput([
+          {
+            commandId: "cmd-1",
+            deviceId: "battery",
+            issuedAt: "2026-03-16T10:00:00.000Z",
+            type: "refresh_state",
+            effectiveWindow: { startAt: "2026-03-16T10:00:00.000Z", endAt: "2026-03-16T10:30:00.000Z" },
+          },
+        ]),
+        observedStateFreshness: {
+          capturedAt: "2026-03-16T10:05:00.000Z",
+          maxAgeSeconds: 60,
+          overallStatus: "stale",
+          counts: { fresh: 0, stale: 1, missing: 0, unknown: 0 },
+          devices: [{ deviceId: "battery", status: "stale" }],
+        },
       },
       executor,
       buildCapabilitiesProvider(),

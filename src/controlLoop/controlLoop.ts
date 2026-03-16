@@ -1,5 +1,7 @@
 import type { DeviceCommand, SystemState } from "../domain";
 import type { OptimizerDecision, OptimizerOutput } from "../domain/optimizer";
+import type { ObservedStateFreshnessSummary } from "../domain/observedStateFreshness";
+import type { TelemetryHealthSummary } from "../domain/telemetryHealth";
 
 export interface ControlLoopDeviceTelemetry {
   lastSeenAt?: string;
@@ -13,6 +15,8 @@ export interface ControlLoopInput {
   systemState: SystemState;
   optimizerOutput: OptimizerOutput;
   deviceTelemetry?: Record<string, ControlLoopDeviceTelemetry>;
+  observedStateFreshness?: ObservedStateFreshnessSummary;
+  telemetryHealth?: TelemetryHealthSummary;
 }
 
 export interface SkippedDecision {

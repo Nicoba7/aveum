@@ -141,4 +141,102 @@ describe("evaluateExecutionPolicy", () => {
     expect(decision.allowed).toBe(true);
     expect(decision.reasonCodes).toHaveLength(0);
   });
+
+  it("denies high-risk command when observed state is missing", () => {
+    const decision = evaluateExecutionPolicy({
+      now: "2026-03-16T10:05:00.000Z",
+      request: buildRequest({
+        canonicalCommand: {
+          kind: "set_mode",
+          targetDeviceId: "battery",
+          effectiveWindow: {
+            startAt: "2026-03-16T10:00:00.000Z",
+            endAt: "2026-03-16T10:30:00.000Z",
+          },
+          mode: "charge",
+        },
+      }),
+      controlLoopResult: buildControlLoopResult(),
+      optimizerOutput: buildOptimizerOutput(),
+      observedStateFreshness: {
+        capturedAt: "2026-03-16T10:05:00.000Z",
+        maxAgeSeconds: 300,
+        overallStatus: "missing",
+        counts: { fresh: 0, stale: 0, missing: 1, unknown: 0 },
+        devices: [{ deviceId: "battery", status: "missing" }],
+      },
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCodes).toContain("OBSERVED_STATE_MISSING");
+  });
+
+  it("denies high-risk command when observed state is stale", () => {
+    const decision = evaluateExecutionPolicy({
+      now: "2026-03-16T10:05:00.000Z",
+      request: buildRequest(),
+      controlLoopResult: buildControlLoopResult(),
+      optimizerOutput: buildOptimizerOutput(),
+      observedStateFreshness: {
+        capturedAt: "2026-03-16T10:05:00.000Z",
+        maxAgeSeconds: 60,
+        overallStatus: "stale",
+        counts: { fresh: 0, stale: 1, missing: 0, unknown: 0 },
+        devices: [
+          {
+            deviceId: "battery",
+            status: "stale",
+            lastTelemetryAt: "2026-03-16T10:00:00.000Z",
+            ageSeconds: 300,
+          },
+        ],
+      },
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCodes).toContain("OBSERVED_STATE_STALE");
+  });
+
+  it("denies high-risk command when observed state is unknown", () => {
+    const decision = evaluateExecutionPolicy({
+      now: "2026-03-16T10:05:00.000Z",
+      request: buildRequest(),
+      controlLoopResult: buildControlLoopResult(),
+      optimizerOutput: buildOptimizerOutput(),
+      observedStateFreshness: {
+        capturedAt: "2026-03-16T10:05:00.000Z",
+        maxAgeSeconds: 60,
+        overallStatus: "unknown",
+        counts: { fresh: 0, stale: 0, missing: 0, unknown: 1 },
+        devices: [{ deviceId: "battery", status: "unknown" }],
+      },
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCodes).toContain("OBSERVED_STATE_UNKNOWN");
+  });
+
+  it("allows low-risk refresh_state even when observed state is stale", () => {
+    const decision = evaluateExecutionPolicy({
+      now: "2026-03-16T10:05:00.000Z",
+      request: buildRequest({
+        canonicalCommand: {
+          kind: "refresh_state",
+          targetDeviceId: "battery",
+        },
+      }),
+      controlLoopResult: buildControlLoopResult(),
+      optimizerOutput: buildOptimizerOutput(),
+      observedStateFreshness: {
+        capturedAt: "2026-03-16T10:05:00.000Z",
+        maxAgeSeconds: 60,
+        overallStatus: "stale",
+        counts: { fresh: 0, stale: 1, missing: 0, unknown: 0 },
+        devices: [{ deviceId: "battery", status: "stale" }],
+      },
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.reasonCodes).toHaveLength(0);
+  });
 });

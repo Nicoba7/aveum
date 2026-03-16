@@ -1,6 +1,20 @@
 import type { CanonicalDeviceCommand } from "../application/controlLoopExecution/canonicalCommand";
 import type { CommandAcknowledgementStatus } from "../application/controlLoopExecution/projectExecutionOutcome";
 import type { CommandExecutionStatus } from "../application/controlLoopExecution/types";
+import type { OptimizationMode } from "../domain";
+import type { CanonicalValueLedger } from "../domain/valueLedger";
+
+export interface ExecutionCycleDecisionSummary {
+  decisionId: string;
+  action: string;
+  targetDeviceIds: string[];
+}
+
+export interface ExecutionCycleFinancialContext {
+  optimizationMode: OptimizationMode;
+  decisionsTaken: ExecutionCycleDecisionSummary[];
+  valueLedger: CanonicalValueLedger;
+}
 
 /**
  * Canonical historical record of per-request execution outcomes.
@@ -19,5 +33,6 @@ export interface ExecutionJournalEntry {
   acknowledgementStatus?: CommandAcknowledgementStatus;
   reasonCodes?: string[];
   stage?: "preflight_validation" | "reconciliation" | "dispatch";
+  cycleFinancialContext?: ExecutionCycleFinancialContext;
   schemaVersion: string;
 }

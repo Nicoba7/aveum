@@ -1,5 +1,6 @@
 import type { ControlLoopResult } from "../../controlLoop/controlLoop";
 import type { OptimizerOutput } from "../../domain/optimizer";
+import type { ObservedStateFreshnessSummary } from "../../domain/observedStateFreshness";
 import type { CommandExecutionRequest } from "./types";
 
 /**
@@ -14,6 +15,9 @@ export type ExecutionPolicyReasonCode =
   | "NO_ACTIONABLE_DECISION"
   | "CONFLICTING_COMMAND_FOR_DEVICE"
   | "COMMAND_STALE"
+  | "OBSERVED_STATE_MISSING"
+  | "OBSERVED_STATE_STALE"
+  | "OBSERVED_STATE_UNKNOWN"
   | "POLICY_BLOCKED";
 
 export interface ExecutionPolicyDecision {
@@ -26,5 +30,6 @@ export interface ExecutionPolicyEvaluationInput {
   request: CommandExecutionRequest;
   controlLoopResult: ControlLoopResult;
   optimizerOutput: OptimizerOutput;
+  observedStateFreshness?: ObservedStateFreshnessSummary;
   reservedDeviceIds?: Set<string>;
 }

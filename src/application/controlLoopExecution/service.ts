@@ -16,6 +16,10 @@ import type { DeviceShadowStore } from "../../shadow/deviceShadowStore";
 import { projectExecutionToDeviceShadow } from "./projectExecutionToDeviceShadow";
 import { reconcileCanonicalCommandWithShadow } from "./reconcileCanonicalCommandWithShadow";
 import type { ExecutionJournalStore } from "../../journal/executionJournalStore";
+import type {
+  ExecutionCycleDecisionSummary,
+  ExecutionCycleFinancialContext,
+} from "../../journal/executionJournal";
 import { toExecutionJournalEntry } from "./toExecutionJournalEntry";
 import { evaluateExecutionPolicy } from "./evaluateExecutionPolicy";
 import type { ExecutionPolicyReasonCode } from "./executionPolicyTypes";
@@ -89,6 +93,7 @@ function appendJournalEntries(
   requestLookup: Map<string, CommandExecutionRequest>,
   outcomes: CommandExecutionResult[],
   recordedAt: string,
+  cycleFinancialContext?: ExecutionCycleFinancialContext,
 ): void {
   if (!journalStore || !outcomes.length) {
     return;
@@ -101,9 +106,17 @@ function appendJournalEntries(
     }
 
     journalStore.append(
-      toExecutionJournalEntry(request.canonicalCommand, outcome, recordedAt),
+      toExecutionJournalEntry(request.canonicalCommand, outcome, recordedAt, cycleFinancialContext),
     );
   });
+}
+
+function buildCycleDecisionSummaries(controlLoopResult: ControlLoopResult): ExecutionCycleDecisionSummary[] {
+  return controlLoopResult.activeDecisions.map((decision) => ({
+    decisionId: decision.decisionId,
+    action: decision.action,
+    targetDeviceIds: [...decision.targetDeviceIds],
+  }));
 }
 
 function mapRequests(input: ControlLoopInput, result: ControlLoopResult): CommandExecutionRequest[] {
@@ -157,8 +170,16 @@ export async function runControlLoopExecutionService(
   capabilitiesProvider?: DeviceCapabilitiesProvider,
   shadowStore?: DeviceShadowStore,
   journalStore?: ExecutionJournalStore,
+  cycleFinancialContext?: Omit<ExecutionCycleFinancialContext, "decisionsTaken">,
 ): Promise<ControlLoopExecutionServiceResult> {
   const controlLoopResult = runControlLoop(input);
+  const enrichedCycleFinancialContext = cycleFinancialContext
+    ? {
+      ...cycleFinancialContext,
+      decisionsTaken: buildCycleDecisionSummaries(controlLoopResult),
+    }
+    : undefined;
+
   const requests = mapRequests(input, controlLoopResult);
   const requestLookup = new Map(requests.map((request) => [request.executionRequestId, request]));
 
@@ -220,6 +241,7 @@ export async function runControlLoopExecutionService(
       request,
       controlLoopResult,
       optimizerOutput: input.optimizerOutput,
+      observedStateFreshness: input.observedStateFreshness,
       reservedDeviceIds,
     });
 
@@ -235,7 +257,7 @@ export async function runControlLoopExecutionService(
 
   if (!dispatchableRequests.length) {
     const outcomes = [...preflightFailures, ...reconciliationSkips, ...policyDenials];
-    appendJournalEntries(journalStore, requestLookup, outcomes, input.now);
+    appendJournalEntries(journalStore, requestLookup, outcomes, input.now, enrichedCycleFinancialContext);
 
     return {
       controlLoopResult,
@@ -247,7 +269,7 @@ export async function runControlLoopExecutionService(
     const executionResults = await executor.execute(dispatchableRequests);
     const outcomes = [...preflightFailures, ...reconciliationSkips, ...policyDenials, ...executionResults];
 
-    appendJournalEntries(journalStore, requestLookup, outcomes, input.now);
+    appendJournalEntries(journalStore, requestLookup, outcomes, input.now, enrichedCycleFinancialContext);
 
     if (shadowStore) {
       const requestByExecutionId = new Map(
@@ -292,7 +314,7 @@ export async function runControlLoopExecutionService(
       ...failedResults,
     ];
 
-    appendJournalEntries(journalStore, requestLookup, outcomes, input.now);
+    appendJournalEntries(journalStore, requestLookup, outcomes, input.now, enrichedCycleFinancialContext);
 
     return {
       controlLoopResult,

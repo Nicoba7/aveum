@@ -2,6 +2,8 @@
 
 This document locks the Gridly execution architecture before live device adapter work begins.
 
+Related: [Gridly Engineering Constitution](./engineering-constitution.md)
+
 ## Current Flow
 
 ```text

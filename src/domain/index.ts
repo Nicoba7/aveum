@@ -25,5 +25,24 @@ export type {
   OptimizerStatus,
   OptimizerSummary,
 } from "./optimizer";
+export type {
+  IntentObservedDriftOutcome,
+  IntentObservedDriftReasonCode,
+  IntentObservedDriftResult,
+} from "./intentObservedDrift";
+export type { CanonicalChargingState, CanonicalDeviceObservedState } from "./observedDeviceState";
+export type {
+  DeviceObservedStateFreshness,
+  ObservedStateFreshnessStatus,
+  ObservedStateFreshnessSummary,
+} from "./observedStateFreshness";
 export type { SystemState } from "./system";
 export type { TariffRate, TariffRateSource, TariffSchedule } from "./tariff";
+export type {
+  DeviceTelemetryHealth,
+  TelemetryHealthReasonCode,
+  TelemetryHealthStatus,
+  TelemetryHealthSummary,
+} from "./telemetryHealth";
+export type { CanonicalDeviceTelemetry } from "./telemetry";
+export type { CanonicalValueLedger, ValueLedgerBaselineType } from "./valueLedger";
