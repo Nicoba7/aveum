@@ -131,4 +131,55 @@ describe("executePlan stage", () => {
     expect(output.execution.kind).toBe("non_executed");
     expect(output.execution.rejectedOpportunities).toEqual(rejected);
   });
+
+  it("fails closed to non_executed when executable plan has no dispatchable requests", async () => {
+    const executor: DeviceCommandExecutor = {
+      execute: vi.fn(async () => []),
+    };
+
+    const output = await executePlan({
+      plan,
+      dispatchableRequests: [],
+      executor,
+      preExecutionOutcomes: [],
+      selectedEconomicTraces: new Map(),
+      executionPosture: "normal",
+      rejectedOpportunities: rejected,
+    });
+
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(output.execution.kind).toBe("non_executed");
+    expect(output.dispatchableRequests).toEqual([]);
+  });
+
+  it("ignores dispatchable requests when plan is non-executable", async () => {
+    const executor: DeviceCommandExecutor = {
+      execute: vi.fn(async () => []),
+    };
+
+    const output = await executePlan({
+      plan: {
+        kind: "non_executable",
+        householdDecision: {
+          kind: "no_action",
+          rejectedOpportunities: rejected,
+          reasonCodes: ["EXECUTION_PLAN_EMPTY_COMMAND_SET"],
+          decisionReason: "No executable commands remained after execution planning.",
+        },
+        reasonCodes: ["EXECUTION_PLAN_EMPTY_COMMAND_SET"],
+        decisionReason: "No executable commands remained after execution planning.",
+        commands: [],
+      },
+      dispatchableRequests,
+      executor,
+      preExecutionOutcomes: [],
+      selectedEconomicTraces: new Map(),
+      executionPosture: "normal",
+      rejectedOpportunities: rejected,
+    });
+
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(output.execution.kind).toBe("non_executed");
+    expect(output.dispatchableRequests).toEqual([]);
+  });
 });
