@@ -10,36 +10,35 @@ import type {
 import { mapToCanonicalDeviceCommand } from "./canonicalCommand";
 import { buildCommandExecutionIdentity, matchDecisionForCommand } from "./identity";
 import type { DeviceCapabilitiesProvider } from "../../capabilities/deviceCapabilitiesProvider";
-import {
-  validateCanonicalCommandAgainstCapabilities,
-  type CanonicalCommandValidationReasonCode,
-} from "./commandValidation";
 import type { DeviceShadowStore } from "../../shadow/deviceShadowStore";
 import { projectExecutionToDeviceShadow } from "./projectExecutionToDeviceShadow";
-import { reconcileCanonicalCommandWithShadow } from "./reconcileCanonicalCommandWithShadow";
 import type { ExecutionJournalStore } from "../../journal/executionJournalStore";
 import type {
   ExecutionCycleDecisionSummary,
   ExecutionCycleFinancialContext,
 } from "../../journal/executionJournal";
-import type { CycleEconomicSnapshot } from "../../journal/executionJournal";
-import { toExecutionJournalEntry } from "./toExecutionJournalEntry";
-import { evaluateExecutionPolicy } from "./evaluateExecutionPolicy";
 import type {
-  ExecutionPolicyReasonCode,
   RuntimeExecutionMode,
   RuntimeExecutionPosture,
   RuntimeExecutionGuardrailContext,
 } from "./executionPolicyTypes";
 import { projectExecutionOutcome } from "./projectExecutionOutcome";
-import { evaluateRuntimeExecutionGuardrail } from "./evaluateRuntimeExecutionGuardrail";
 import { classifyRuntimeExecutionPosture } from "./classifyRuntimeExecutionPosture";
+import type { EconomicPrerejection, RejectedOpportunity } from "./pipelineTypes";
 import {
-  evaluateEconomicActionPreference,
-  scoreEconomicActionCandidate,
-  type EconomicActionCandidate,
-} from "./evaluateEconomicActionPreference";
-import { evaluateHouseholdEconomicOpportunity } from "./evaluateHouseholdEconomicOpportunity";
+  evaluateOpportunityEligibility,
+} from "./stages/evaluateOpportunityEligibility";
+import {
+  arbitrateDeviceOpportunities,
+  mapDeviceArbitrationPrerejections,
+} from "./stages/arbitrateDeviceOpportunities";
+import {
+  mapHouseholdDecisionPrerejections,
+  selectHouseholdDecision,
+} from "./stages/selectHouseholdDecision";
+import { buildExecutionPlan } from "./stages/buildExecutionPlan";
+import { executePlan } from "./stages/executePlan";
+import { projectJournal } from "./stages/projectJournal";
 
 export interface ControlLoopExecutionServiceResult {
   controlLoopResult: ControlLoopResult;
@@ -47,184 +46,31 @@ export interface ControlLoopExecutionServiceResult {
   executionPosture: RuntimeExecutionPosture;
 }
 
-function withExecutionPosture(
-  results: CommandExecutionResult[],
-  executionPosture: RuntimeExecutionPosture,
-): CommandExecutionResult[] {
-  return results.map((result) => ({
-    ...result,
-    executionPosture,
-  }));
-}
-
-function mapPreflightFailure(
-  request: CommandExecutionRequest,
-  reasonCodes: CanonicalCommandValidationReasonCode[],
-  message: string,
-): CommandExecutionResult {
-  return {
-    opportunityId: request.opportunityId,
-    executionRequestId: request.executionRequestId,
-    requestId: request.requestId,
-    idempotencyKey: request.idempotencyKey,
-    decisionId: request.decisionId,
-    targetDeviceId: request.targetDeviceId,
-    commandId: request.commandId,
-    deviceId: request.targetDeviceId,
-    status: "failed",
-    message,
-    errorCode: reasonCodes[0],
-    reasonCodes,
-  };
-}
-
-function mapReconciliationSkip(
-  request: CommandExecutionRequest,
-  reasonCodes: string[],
-): CommandExecutionResult {
-  return {
-    opportunityId: request.opportunityId,
-    executionRequestId: request.executionRequestId,
-    requestId: request.requestId,
-    idempotencyKey: request.idempotencyKey,
-    decisionId: request.decisionId,
-    targetDeviceId: request.targetDeviceId,
-    commandId: request.commandId,
-    deviceId: request.targetDeviceId,
-    status: "skipped",
-    message: "Command skipped by canonical shadow reconciliation.",
-    errorCode: reasonCodes[0],
-    reasonCodes,
-  };
-}
-
-function mapPolicyDenied(
-  request: CommandExecutionRequest,
-  reasonCodes: ExecutionPolicyReasonCode[],
-  economicArbitration?: ExecutionEconomicArbitrationTrace,
-): CommandExecutionResult {
-  return {
-    opportunityId: request.opportunityId,
-    executionRequestId: request.executionRequestId,
-    requestId: request.requestId,
-    idempotencyKey: request.idempotencyKey,
-    decisionId: request.decisionId,
-    targetDeviceId: request.targetDeviceId,
-    commandId: request.commandId,
-    deviceId: request.targetDeviceId,
-    status: "skipped",
-    message: "Command denied by canonical execution policy.",
-    errorCode: reasonCodes[0],
-    reasonCodes,
-    economicArbitration,
-  };
-}
-
-interface EconomicPrerejection {
-  reasonCodes: ExecutionPolicyReasonCode[];
-  economicArbitration?: ExecutionEconomicArbitrationTrace;
-}
-
-interface EligibleOpportunity {
-  request: CommandExecutionRequest;
-  matchedDecision?: ControlLoopResult["activeDecisions"][number];
-  economicCandidate?: EconomicActionCandidate;
-}
-
-function appendJournalEntries(
+function persistJournalProjection(
   journalStore: ExecutionJournalStore | undefined,
-  requestLookup: Map<string, CommandExecutionRequest>,
-  outcomes: CommandExecutionResult[],
-  recordedAt: string,
-  cycleId: string | undefined,
-  cycleFinancialContext?: ExecutionCycleFinancialContext,
-): void {
-  if (!journalStore || !outcomes.length) {
-    return;
-  }
-
-  outcomes.forEach((outcome) => {
-    const request = requestLookup.get(outcome.executionRequestId);
-    if (!request) {
-      return;
-    }
-
-    journalStore.append(
-      toExecutionJournalEntry(request.canonicalCommand, outcome, recordedAt, cycleId, cycleFinancialContext),
-    );
-  });
-}
-
-function appendCycleHeartbeat(
-  journalStore: ExecutionJournalStore | undefined,
-  recordedAt: string,
-  executionPosture: RuntimeExecutionPosture,
-  runtimeGuardrailContext: RuntimeExecutionGuardrailContext | undefined,
-  outcomes: CommandExecutionResult[],
-  failClosedTriggered: boolean,
-  cycleHeartbeatMeta?: { cycleId?: string; replanReason?: string },
-  cycleFinancialContext?: ExecutionCycleFinancialContext,
+  projection: ReturnType<typeof projectJournal>,
 ): void {
   if (!journalStore) {
     return;
   }
 
-  const commandsSuppressed = outcomes.filter(
-    (r) =>
-      r.status === "skipped" &&
-      (r.reasonCodes ?? []).some((c) => c.startsWith("RUNTIME_") || c.startsWith("ECONOMIC_")),
-  ).length;
-
-  journalStore.appendHeartbeat({
-    entryKind: "cycle_heartbeat",
-    cycleId: cycleHeartbeatMeta?.cycleId,
-    recordedAt,
-    executionPosture,
-    planFreshnessStatus: runtimeGuardrailContext?.planFreshnessStatus,
-    replanTrigger: runtimeGuardrailContext?.replanTrigger,
-    replanReason: cycleHeartbeatMeta?.replanReason,
-    stalePlanReuseCount: runtimeGuardrailContext?.stalePlanReuseCount,
-    safeHoldMode: runtimeGuardrailContext?.safeHoldMode,
-    stalePlanWarning: runtimeGuardrailContext?.stalePlanWarning,
-    commandsIssued: outcomes.filter((r) => r.status === "issued").length,
-    commandsSkipped: outcomes.filter((r) => r.status === "skipped").length,
-    commandsFailed: outcomes.filter((r) => r.status === "failed").length,
-    commandsSuppressed,
-    failClosedTriggered,
-    economicSnapshot: buildCycleEconomicSnapshot(cycleFinancialContext, executionPosture, commandsSuppressed),
-    schemaVersion: "cycle-heartbeat.v1",
+  projection.journalEntries.forEach((entry) => {
+    journalStore.append(entry);
   });
+
+  journalStore.appendHeartbeat(projection.cycleHeartbeat);
 }
 
-const VALUE_SEEKING_ACTIONS = new Set([
-  "charge_battery",
-  "discharge_battery",
-  "charge_ev",
-  "export_to_grid",
-]);
-
-function buildCycleEconomicSnapshot(
-  ctx: ExecutionCycleFinancialContext | undefined,
-  executionPosture: RuntimeExecutionPosture,
-  commandsSuppressed: number,
-): CycleEconomicSnapshot | undefined {
-  if (!ctx) {
-    return undefined;
-  }
-
-  const hasValueSeekingDecisions = ctx.decisionsTaken.some((d) => VALUE_SEEKING_ACTIONS.has(d.action));
-  const valueSeekingExecutionDeferred =
-    executionPosture !== "normal" && commandsSuppressed > 0 && hasValueSeekingDecisions;
-
-  return {
-    optimizationMode: ctx.optimizationMode,
-    planningConfidenceLevel: ctx.planningConfidenceLevel,
-    conservativeAdjustmentApplied: ctx.conservativeAdjustmentApplied,
-    hasValueSeekingDecisions,
-    valueSeekingExecutionDeferred,
-    estimatedSavingsVsBaselinePence: ctx.valueLedger.estimatedSavingsVsBaselinePence,
-    planningInputCoverage: ctx.planningInputCoverage,
-  };
+function appendStageAccumulation(
+  rejectedAccumulator: RejectedOpportunity[],
+  compatibilityAccumulator: CommandExecutionResult[],
+  stage: {
+    rejected: RejectedOpportunity[];
+    compatibilityOutcomes: CommandExecutionResult[];
+  },
+): void {
+  rejectedAccumulator.push(...stage.rejected);
+  compatibilityAccumulator.push(...stage.compatibilityOutcomes);
 }
 
 function buildCycleDecisionSummaries(controlLoopResult: ControlLoopResult): ExecutionCycleDecisionSummary[] {
@@ -243,300 +89,6 @@ function buildCycleDecisionSummaries(controlLoopResult: ControlLoopResult): Exec
     conservativeAdjustmentReason: decision.conservativeAdjustmentReason,
     decisionReason: decision.reason,
   }));
-}
-
-function buildEconomicPreferencePreselection(
-  opportunities: EligibleOpportunity[],
-  financialContext: ExecutionCycleFinancialContext,
-): {
-  prerejections: Map<string, EconomicPrerejection>;
-  selectedTraces: Map<string, ExecutionEconomicArbitrationTrace>;
-} {
-  const prerejections = new Map<string, EconomicPrerejection>();
-  const selectedTraces = new Map<string, ExecutionEconomicArbitrationTrace>();
-
-  const byDevice = new Map<string, EligibleOpportunity[]>();
-  for (const opportunity of opportunities) {
-    const group = byDevice.get(opportunity.request.targetDeviceId) ?? [];
-    group.push(opportunity);
-    byDevice.set(opportunity.request.targetDeviceId, group);
-  }
-
-  for (const deviceOpportunities of byDevice.values()) {
-    if (deviceOpportunities.length <= 1) {
-      continue;
-    }
-
-    const candidates: EconomicActionCandidate[] = deviceOpportunities.map((opportunity) =>
-      opportunity.economicCandidate ?? buildEconomicCandidate(opportunity.request, financialContext),
-    );
-
-    const preference = evaluateEconomicActionPreference(candidates, {
-      planningConfidenceLevel: financialContext.planningConfidenceLevel,
-      optimizationMode: financialContext.optimizationMode,
-    });
-
-    if (!preference) {
-      continue;
-    }
-
-    const selectedCandidate = candidates.find(
-      (candidate) => candidate.executionRequestId === preference.preferredRequestId,
-    );
-
-    if (!selectedCandidate) {
-      continue;
-    }
-
-    selectedTraces.set(selectedCandidate.executionRequestId, {
-      comparisonScope: "device",
-      selectedOpportunityId: selectedCandidate.opportunityId,
-      selectedExecutionRequestId: selectedCandidate.executionRequestId,
-      selectedDecisionId: selectedCandidate.decisionId,
-      selectedTargetDeviceId: selectedCandidate.targetDeviceId,
-      selectedAction: selectedCandidate.action,
-      selectedScorePencePerKwh: preference.selectionScore,
-      selectionReason: preference.selectionReason,
-      alternativesConsidered: preference.alternativesConsidered,
-    });
-
-    for (const rejection of preference.rejections) {
-      const rejectedCandidate = candidates.find(
-        (candidate) => candidate.executionRequestId === rejection.executionRequestId,
-      );
-      prerejections.set(rejection.executionRequestId, {
-        reasonCodes: ["INFERIOR_ECONOMIC_VALUE"],
-        economicArbitration: {
-          comparisonScope: "device",
-          selectedOpportunityId: selectedCandidate.opportunityId,
-          selectedExecutionRequestId: selectedCandidate.executionRequestId,
-          selectedDecisionId: selectedCandidate.decisionId,
-          selectedTargetDeviceId: selectedCandidate.targetDeviceId,
-          selectedAction: selectedCandidate.action,
-          selectedScorePencePerKwh: preference.selectionScore,
-          candidateScorePencePerKwh: rejectedCandidate
-            ? scoreEconomicActionCandidate(rejectedCandidate)
-            : undefined,
-          scoreDeltaPencePerKwh: rejection.inferiorByPencePerKwh,
-          selectionReason: preference.selectionReason,
-          comparisonReason: rejection.selectionReason,
-          alternativesConsidered: preference.alternativesConsidered,
-        },
-      });
-    }
-  }
-
-  return { prerejections, selectedTraces };
-}
-
-function buildEconomicCandidate(
-  request: CommandExecutionRequest,
-  financialContext: ExecutionCycleFinancialContext,
-): EconomicActionCandidate {
-  const decision = request.decisionId
-    ? financialContext.decisionsTaken.find((item) => item.decisionId === request.decisionId)
-    : undefined;
-
-  return {
-    opportunityId: request.opportunityId,
-    executionRequestId: request.executionRequestId,
-    decisionId: request.decisionId,
-    targetDeviceId: request.targetDeviceId,
-    action: decision?.action as EconomicActionCandidate["action"],
-    command: request.canonicalCommand,
-    effectiveStoredEnergyValue: decision?.effectiveStoredEnergyValue,
-    netStoredEnergyValue: decision?.netStoredEnergyValue,
-    marginalImportAvoidance: decision?.marginalImportAvoidance,
-    marginalExportValue: decision?.marginalExportValue,
-  };
-}
-
-function buildHouseholdEconomicArbitration(
-  opportunities: EligibleOpportunity[],
-  financialContext: ExecutionCycleFinancialContext,
-): {
-  prerejections: Map<string, EconomicPrerejection>;
-  selectedTraces: Map<string, ExecutionEconomicArbitrationTrace>;
-} {
-  const prerejections = new Map<string, EconomicPrerejection>();
-  const selectedTraces = new Map<string, ExecutionEconomicArbitrationTrace>();
-  const candidates = opportunities.map((opportunity) =>
-    opportunity.economicCandidate ?? buildEconomicCandidate(opportunity.request, financialContext),
-  );
-  const arbitration = evaluateHouseholdEconomicOpportunity(candidates, {
-    planningConfidenceLevel: financialContext.planningConfidenceLevel,
-    optimizationMode: financialContext.optimizationMode,
-  });
-
-  if (!arbitration) {
-    return { prerejections, selectedTraces };
-  }
-
-  const selectedCandidate = candidates.find(
-    (candidate) => candidate.executionRequestId === arbitration.preferredRequestId,
-  );
-
-  if (!selectedCandidate) {
-    return { prerejections, selectedTraces };
-  }
-
-  selectedTraces.set(selectedCandidate.executionRequestId, {
-    comparisonScope: "household",
-    selectedOpportunityId: selectedCandidate.opportunityId,
-    selectedExecutionRequestId: selectedCandidate.executionRequestId,
-    selectedDecisionId: selectedCandidate.decisionId,
-    selectedTargetDeviceId: selectedCandidate.targetDeviceId,
-    selectedAction: selectedCandidate.action,
-    selectedScorePencePerKwh: arbitration.selectionScore,
-    selectionReason: arbitration.selectionReason,
-    alternativesConsidered: arbitration.alternativesConsidered,
-  });
-
-  arbitration.rejections.forEach((rejection) => {
-    prerejections.set(rejection.executionRequestId, {
-      reasonCodes: ["INFERIOR_HOUSEHOLD_ECONOMIC_VALUE"],
-      economicArbitration: {
-        comparisonScope: "household",
-        selectedOpportunityId: selectedCandidate.opportunityId,
-        selectedExecutionRequestId: selectedCandidate.executionRequestId,
-        selectedDecisionId: selectedCandidate.decisionId,
-        selectedTargetDeviceId: selectedCandidate.targetDeviceId,
-        selectedAction: selectedCandidate.action,
-        selectedScorePencePerKwh: arbitration.selectionScore,
-        candidateScorePencePerKwh: rejection.candidateScore,
-        scoreDeltaPencePerKwh: rejection.inferiorByPencePerKwh,
-        selectionReason: arbitration.selectionReason,
-        comparisonReason: rejection.selectionReason,
-        alternativesConsidered: arbitration.alternativesConsidered,
-      },
-    });
-  });
-
-  return { prerejections, selectedTraces };
-}
-
-function buildEligibleOpportunitySet(params: {
-  requests: CommandExecutionRequest[];
-  input: ControlLoopInput;
-  controlLoopResult: ControlLoopResult;
-  capabilitiesProvider?: DeviceCapabilitiesProvider;
-  shadowStore?: DeviceShadowStore;
-  runtimeGuardrailContext?: RuntimeExecutionGuardrailContext;
-  executionPosture: RuntimeExecutionPosture;
-  postureClassification: ReturnType<typeof classifyRuntimeExecutionPosture> | {
-    posture: "hold_only";
-    reasonCodes: readonly ["RUNTIME_CONSERVATIVE_MODE_ACTIVE", "RUNTIME_CONTEXT_MISSING"];
-    warning: string;
-  };
-  missingRuntimeContextInStrictMode: boolean;
-  cycleFinancialContext?: ExecutionCycleFinancialContext;
-}): {
-  eligibleOpportunities: EligibleOpportunity[];
-  preflightFailures: CommandExecutionResult[];
-  reconciliationSkips: CommandExecutionResult[];
-  policyDenials: CommandExecutionResult[];
-} {
-  const eligibleOpportunities: EligibleOpportunity[] = [];
-  const preflightFailures: CommandExecutionResult[] = [];
-  const reconciliationSkips: CommandExecutionResult[] = [];
-  const policyDenials: CommandExecutionResult[] = [];
-
-  for (const request of params.requests) {
-    if (params.missingRuntimeContextInStrictMode) {
-      policyDenials.push(mapPolicyDenied(request, [...params.postureClassification.reasonCodes]));
-      continue;
-    }
-
-    const matchedDecision = request.decisionId
-      ? params.controlLoopResult.activeDecisions.find((decision) => decision.decisionId === request.decisionId)
-      : undefined;
-
-    const runtimeGuardrailDecision = evaluateRuntimeExecutionGuardrail({
-      command: request.canonicalCommand,
-      decisionAction: matchedDecision?.action,
-      cycleFinancialContext: params.cycleFinancialContext,
-      runtimeContext: params.runtimeGuardrailContext,
-      runtimePosture: params.executionPosture,
-      postureClassification: params.postureClassification,
-    });
-
-    if (runtimeGuardrailDecision.policy === "suppress") {
-      policyDenials.push(mapPolicyDenied(request, runtimeGuardrailDecision.reasonCodes));
-      continue;
-    }
-
-    if (params.capabilitiesProvider) {
-      const capabilities = params.capabilitiesProvider.getCapabilities(request.targetDeviceId);
-      const validation = validateCanonicalCommandAgainstCapabilities(
-        request.canonicalCommand,
-        capabilities,
-        params.input.now,
-      );
-
-      if (!validation.valid) {
-        preflightFailures.push(
-          mapPreflightFailure(
-            request,
-            validation.reasonCodes,
-            "Command failed canonical preflight validation.",
-          ),
-        );
-        continue;
-      }
-    }
-
-    if (params.shadowStore) {
-      const existingShadow = params.shadowStore.getDeviceState(request.targetDeviceId);
-      const reconciliation = reconcileCanonicalCommandWithShadow(
-        request.canonicalCommand,
-        existingShadow,
-        params.input.now,
-      );
-
-      if (reconciliation.action === "skip") {
-        reconciliationSkips.push(mapReconciliationSkip(request, reconciliation.reasonCodes));
-        continue;
-      }
-    }
-
-    const policyDecision = evaluateExecutionPolicy({
-      now: params.input.now,
-      request,
-      controlLoopResult: params.controlLoopResult,
-      optimizerOutput: params.input.optimizerOutput,
-      observedStateFreshness: params.input.observedStateFreshness,
-    });
-
-    if (!policyDecision.allowed) {
-      policyDenials.push(mapPolicyDenied(request, policyDecision.reasonCodes));
-      continue;
-    }
-
-    eligibleOpportunities.push({
-      request,
-      matchedDecision,
-      economicCandidate: params.cycleFinancialContext
-        ? buildEconomicCandidate(request, params.cycleFinancialContext)
-        : undefined,
-    });
-  }
-
-  return {
-    eligibleOpportunities,
-    preflightFailures,
-    reconciliationSkips,
-    policyDenials,
-  };
-}
-
-function attachEconomicArbitrationTraces(
-  results: CommandExecutionResult[],
-  traces: Map<string, ExecutionEconomicArbitrationTrace>,
-): CommandExecutionResult[] {
-  return results.map((result) => {
-    const economicArbitration = traces.get(result.executionRequestId);
-    return economicArbitration ? { ...result, economicArbitration } : result;
-  });
 }
 
 function mapRequests(input: ControlLoopInput, result: ControlLoopResult): CommandExecutionRequest[] {
@@ -596,28 +148,6 @@ function mapOpportunityToRequest(
   };
 }
 
-function mapFailedResults(
-  requests: CommandExecutionRequest[],
-  error: unknown,
-): CommandExecutionResult[] {
-  const message = error instanceof Error ? error.message : "Device command execution failed.";
-
-  return requests.map((request) => ({
-    opportunityId: request.opportunityId,
-    executionRequestId: request.executionRequestId,
-    requestId: request.requestId,
-    idempotencyKey: request.idempotencyKey,
-    decisionId: request.decisionId,
-    targetDeviceId: request.targetDeviceId,
-    commandId: request.commandId,
-    deviceId: request.targetDeviceId,
-    status: "failed",
-    message,
-    errorCode: "EXECUTOR_ERROR",
-    reasonCodes: ["EXECUTOR_ERROR"],
-  }));
-}
-
 /**
  * Thin application seam between canonical planning/control and future live command adapters.
  * See docs/architecture/execution-architecture.md for the orchestration boundary.
@@ -664,11 +194,20 @@ export async function runControlLoopExecutionService(
   const requestLookup = new Map(requests.map((request) => [request.executionRequestId, request]));
 
   if (requests.length === 0) {
-    appendCycleHeartbeat(
-      journalStore, input.now, executionPosture,
-      runtimeGuardrailContext, [], missingRuntimeContextInStrictMode, cycleHeartbeatMeta,
-      enrichedCycleFinancialContext,
-    );
+    const journalProjection = projectJournal({
+      requestLookup,
+      outcomes: [],
+      recordedAt: input.now,
+      executionPosture,
+      runtimeGuardrailContext,
+      failClosedTriggered: missingRuntimeContextInStrictMode,
+      cycleHeartbeatMeta,
+      cycleFinancialContext: enrichedCycleFinancialContext,
+      rejectedOpportunities: [],
+      legacyCompatibilityOutcomes: [],
+    });
+    persistJournalProjection(journalStore, journalProjection);
+
     return {
       controlLoopResult,
       executionResults: [],
@@ -676,14 +215,7 @@ export async function runControlLoopExecutionService(
     };
   }
 
-  const dispatchableRequests: CommandExecutionRequest[] = [];
-  const reservedDeviceIds = new Set<string>();
-  const {
-    eligibleOpportunities,
-    preflightFailures,
-    reconciliationSkips,
-    policyDenials,
-  } = buildEligibleOpportunitySet({
+  const eligibilityEvaluation = evaluateOpportunityEligibility({
     requests,
     input,
     controlLoopResult,
@@ -695,9 +227,14 @@ export async function runControlLoopExecutionService(
     missingRuntimeContextInStrictMode,
     cycleFinancialContext: enrichedCycleFinancialContext,
   });
+  const eligibleOpportunities = eligibilityEvaluation.eligible;
+  // Ordering invariant for accumulation: eligibility -> device -> household -> planning.
+  // This ordering is consumed by downstream compatibility/journal pathways.
+  const rejectedOpportunities: RejectedOpportunity[] = [...eligibilityEvaluation.rejected];
+  const policyDenials: CommandExecutionResult[] = [...eligibilityEvaluation.compatibilityOutcomes];
 
   const deviceEconomicArbitration = enrichedCycleFinancialContext
-    ? buildEconomicPreferencePreselection(eligibleOpportunities, enrichedCycleFinancialContext)
+    ? arbitrateDeviceOpportunities(eligibleOpportunities, enrichedCycleFinancialContext)
     : {
         prerejections: new Map<string, EconomicPrerejection>(),
         selectedTraces: new Map<string, ExecutionEconomicArbitrationTrace>(),
@@ -708,31 +245,23 @@ export async function runControlLoopExecutionService(
   );
 
   const householdEconomicArbitration = enrichedCycleFinancialContext
-    ? buildHouseholdEconomicArbitration(postDeviceEligibleOpportunities, enrichedCycleFinancialContext)
+    ? selectHouseholdDecision(postDeviceEligibleOpportunities, enrichedCycleFinancialContext)
     : {
         prerejections: new Map<string, EconomicPrerejection>(),
         selectedTraces: new Map<string, ExecutionEconomicArbitrationTrace>(),
       };
 
-  deviceEconomicArbitration.prerejections.forEach((rejection, executionRequestId) => {
-    const request = requestLookup.get(executionRequestId);
-    if (!request) {
-      return;
-    }
-    policyDenials.push(
-      mapPolicyDenied(request, rejection.reasonCodes, rejection.economicArbitration),
-    );
-  });
+  const deviceArbitrationMapping = mapDeviceArbitrationPrerejections(
+    deviceEconomicArbitration.prerejections,
+    requestLookup,
+  );
+  appendStageAccumulation(rejectedOpportunities, policyDenials, deviceArbitrationMapping);
 
-  householdEconomicArbitration.prerejections.forEach((rejection, executionRequestId) => {
-    const request = requestLookup.get(executionRequestId);
-    if (!request) {
-      return;
-    }
-    policyDenials.push(
-      mapPolicyDenied(request, rejection.reasonCodes, rejection.economicArbitration),
-    );
-  });
+  const householdDecisionMapping = mapHouseholdDecisionPrerejections(
+    householdEconomicArbitration.prerejections,
+    requestLookup,
+  );
+  appendStageAccumulation(rejectedOpportunities, policyDenials, householdDecisionMapping);
 
   const selectedEconomicTraces = new Map<string, ExecutionEconomicArbitrationTrace>([
     ...deviceEconomicArbitration.selectedTraces,
@@ -743,143 +272,72 @@ export async function runControlLoopExecutionService(
     (opportunity) => !householdEconomicArbitration.prerejections.has(opportunity.request.executionRequestId),
   );
 
-  for (const opportunity of finalEligibleOpportunities) {
-    const policyDecision = evaluateExecutionPolicy({
-      now: input.now,
-      request: opportunity.request,
-      controlLoopResult,
-      optimizerOutput: input.optimizerOutput,
-      observedStateFreshness: input.observedStateFreshness,
-      reservedDeviceIds,
-    });
+  const executionPlanStage = buildExecutionPlan({
+    opportunities: finalEligibleOpportunities,
+    input,
+    controlLoopResult,
+  });
+  appendStageAccumulation(rejectedOpportunities, policyDenials, executionPlanStage);
 
-    if (!policyDecision.allowed) {
-      policyDenials.push(mapPolicyDenied(opportunity.request, policyDecision.reasonCodes));
-      continue;
-    }
+  const executedPlan = await executePlan({
+    plan: executionPlanStage.plan,
+    dispatchableRequests: executionPlanStage.dispatchableRequests,
+    executor,
+    preExecutionOutcomes: policyDenials,
+    selectedEconomicTraces,
+    executionPosture,
+    rejectedOpportunities,
+  });
 
-    reservedDeviceIds.add(opportunity.request.targetDeviceId);
-    dispatchableRequests.push(opportunity.request);
-  }
+  const journalProjection = projectJournal({
+    requestLookup,
+    outcomes: executedPlan.outcomes,
+    recordedAt: input.now,
+    executionPosture,
+    runtimeGuardrailContext,
+    failClosedTriggered: missingRuntimeContextInStrictMode,
+    cycleHeartbeatMeta,
+    cycleFinancialContext: enrichedCycleFinancialContext,
+    executionPlan: executionPlanStage.plan,
+    executionResult: executedPlan.execution,
+    rejectedOpportunities: executedPlan.execution.rejectedOpportunities,
+    legacyCompatibilityOutcomes: policyDenials,
+  });
+  persistJournalProjection(journalStore, journalProjection);
 
-  if (!dispatchableRequests.length) {
-    const outcomes = withExecutionPosture(
-      [...preflightFailures, ...reconciliationSkips, ...policyDenials],
-      executionPosture,
-    );
-    appendJournalEntries(
-      journalStore,
-      requestLookup,
-      outcomes,
-      input.now,
-      cycleHeartbeatMeta?.cycleId,
-      enrichedCycleFinancialContext,
-    );
-    appendCycleHeartbeat(
-      journalStore, input.now, executionPosture,
-      runtimeGuardrailContext, outcomes, missingRuntimeContextInStrictMode, cycleHeartbeatMeta,
-      enrichedCycleFinancialContext,
-    );
-
-    return {
-      controlLoopResult,
-      executionResults: outcomes,
-      executionPosture,
-    };
-  }
-
-  try {
-    const executionResults = attachEconomicArbitrationTraces(
-      await executor.execute(dispatchableRequests),
-      selectedEconomicTraces,
-    );
-    const outcomes = withExecutionPosture(
-      [...preflightFailures, ...reconciliationSkips, ...policyDenials, ...executionResults],
-      executionPosture,
+  if (shadowStore) {
+    const requestByExecutionId = new Map(
+      executedPlan.dispatchableRequests.map((request) => [request.executionRequestId, request]),
     );
 
-    appendJournalEntries(
-      journalStore,
-      requestLookup,
-      outcomes,
-      input.now,
-      cycleHeartbeatMeta?.cycleId,
-      enrichedCycleFinancialContext,
-    );
-    appendCycleHeartbeat(
-      journalStore, input.now, executionPosture,
-      runtimeGuardrailContext, outcomes, missingRuntimeContextInStrictMode, cycleHeartbeatMeta,
-      enrichedCycleFinancialContext,
-    );
+    executedPlan.adapterResults.forEach((result) => {
+      const request = requestByExecutionId.get(result.executionRequestId);
+      if (!request) {
+        return;
+      }
 
-    if (shadowStore) {
-      const requestByExecutionId = new Map(
-        dispatchableRequests.map((request) => [request.executionRequestId, request]),
+      const outcomeProjection = projectExecutionOutcome(result, request.canonicalCommand);
+      if (!outcomeProjection.shouldUpdateShadow) {
+        return;
+      }
+
+      const existing = shadowStore.getDeviceState(request.targetDeviceId);
+      const projected = projectExecutionToDeviceShadow(
+        existing,
+        request.canonicalCommand,
+        result,
+        input.now,
       );
 
-      executionResults.forEach((result) => {
-        const request = requestByExecutionId.get(result.executionRequestId);
-        if (!request) {
-          return;
-        }
-
-        const outcomeProjection = projectExecutionOutcome(result, request.canonicalCommand);
-        if (!outcomeProjection.shouldUpdateShadow) {
-          return;
-        }
-
-        const existing = shadowStore.getDeviceState(request.targetDeviceId);
-        const projected = projectExecutionToDeviceShadow(
-          existing,
-          request.canonicalCommand,
-          result,
-          input.now,
-        );
-
-        if (projected) {
-          shadowStore.setDeviceState(request.targetDeviceId, projected);
-        }
-      });
-    }
-
-    return {
-      controlLoopResult,
-      executionResults: outcomes,
-      executionPosture,
-    };
-  } catch (error) {
-    const failedResults = attachEconomicArbitrationTraces(
-      mapFailedResults(dispatchableRequests, error),
-      selectedEconomicTraces,
-    );
-    const outcomes = withExecutionPosture(
-      [
-        ...preflightFailures,
-        ...reconciliationSkips,
-        ...policyDenials,
-        ...failedResults,
-      ],
-      executionPosture,
-    );
-
-    appendJournalEntries(
-      journalStore,
-      requestLookup,
-      outcomes,
-      input.now,
-      cycleHeartbeatMeta?.cycleId,
-      enrichedCycleFinancialContext,
-    );
-    appendCycleHeartbeat(
-      journalStore, input.now, executionPosture,
-      runtimeGuardrailContext, outcomes, missingRuntimeContextInStrictMode, cycleHeartbeatMeta,
-      enrichedCycleFinancialContext,
-    );
-
-    return {
-      controlLoopResult,
-      executionResults: outcomes,
-      executionPosture,
-    };
+      if (projected) {
+        shadowStore.setDeviceState(request.targetDeviceId, projected);
+      }
+    });
   }
+
+  return {
+    controlLoopResult,
+    executionResults: executedPlan.outcomes,
+    executionPosture,
+  };
 }
