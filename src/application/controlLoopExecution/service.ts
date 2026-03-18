@@ -369,6 +369,51 @@ function buildDecisionExplanationEntries(params: {
     });
   });
 
+  if (entries.length === 0) {
+    const fallbackDecision = params.cycleFinancialContext?.decisionsTaken?.[0];
+
+    if (fallbackDecision) {
+      safePush(() => ({
+        type: "decision.explained",
+        opportunityId: `${params.cycleId ?? "cycle"}:${fallbackDecision.decisionId}`,
+        timestamp: params.recordedAt,
+        decision: fallbackDecision.action,
+        explanation: generateDecisionExplanation(
+          {
+            opportunityId: `${params.cycleId ?? "cycle"}:${fallbackDecision.decisionId}`,
+            decisionType: fallbackDecision.action,
+            targetDeviceId: fallbackDecision.targetDeviceIds[0],
+            decisionReason:
+              fallbackDecision.decisionReason
+              || "No dispatchable command was issued for this cycle.",
+            planningConfidenceLevel:
+              fallbackDecision.planningConfidenceLevel
+              ?? params.cycleFinancialContext?.planningConfidenceLevel,
+            conservativeAdjustmentApplied:
+              fallbackDecision.conservativeAdjustmentApplied
+              ?? params.cycleFinancialContext?.conservativeAdjustmentApplied,
+            conservativeAdjustmentReason:
+              fallbackDecision.conservativeAdjustmentReason
+              ?? params.cycleFinancialContext?.conservativeAdjustmentReason,
+            economicSignals: {
+              effectiveStoredEnergyValuePencePerKwh: fallbackDecision.effectiveStoredEnergyValue,
+              netStoredEnergyValuePencePerKwh: fallbackDecision.netStoredEnergyValue,
+              marginalImportAvoidancePencePerKwh: fallbackDecision.marginalImportAvoidance,
+              exportValuePencePerKwh: fallbackDecision.marginalExportValue,
+            },
+          },
+          {
+            executionPosture: params.executionPosture,
+          },
+        ),
+        cycleId: params.cycleId,
+        decisionId: fallbackDecision.decisionId,
+        targetDeviceId: fallbackDecision.targetDeviceIds[0],
+        schemaVersion: "decision-explained.v1",
+      }));
+    }
+  }
+
   return entries;
 }
 
@@ -658,7 +703,20 @@ export async function runControlLoopExecutionService(
       canonicalRuntimeSignals,
     });
     const journalProjection = projectJournal(runtimeJournalProjectionPayload);
-    persistJournalProjection(journalStore, journalProjection, []);
+    const opportunityMetadataById = buildOpportunityMetadataIndex({
+      eligibleOpportunities: [],
+      contextByOpportunityId,
+    });
+    const decisionExplanationEntries = buildDecisionExplanationEntries({
+      recordedAt: input.now,
+      cycleId: cycleHeartbeatMeta?.cycleId,
+      executionPosture,
+      selectedOpportunities: [],
+      rejectedOpportunities: [],
+      cycleFinancialContext: enrichedCycleFinancialContext,
+      opportunityMetadataById,
+    });
+    persistJournalProjection(journalStore, journalProjection, decisionExplanationEntries);
 
     return {
       controlLoopResult,
