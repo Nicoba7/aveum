@@ -1,5 +1,5 @@
-import { render, screen, fireEvent, act } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import SimplifiedDashboard from "../pages/SimplifiedDashboard";
 import { setLatestCycleHeartbeat, pushRecentExecutionOutcomes } from "../journal/latestCycleHeartbeatSource";
 
@@ -7,6 +7,8 @@ afterEach(() => {
   act(() => {
     setLatestCycleHeartbeat(undefined);
   });
+
+  vi.restoreAllMocks();
 });
 
 describe("SimplifiedDashboard tabs", () => {
@@ -354,5 +356,87 @@ describe("SimplifiedDashboard tabs", () => {
     expect(screen.getByText("Delivered: Failed")).toBeInTheDocument();
     expect(screen.getAllByText("Confidence: Needs review").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Evidence: Out of date").length).toBeGreaterThan(0);
+  });
+
+  it("bootstraps runtime truth from the durable API bridge on dashboard startup", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        source: "durable_journal",
+        fetchedAt: "2026-03-16T12:25:00.000Z",
+        latestCycleHeartbeat: {
+          entryKind: "cycle_heartbeat",
+          cycleId: "cycle-api-1",
+          recordedAt: "2026-03-16T12:20:00.000Z",
+          executionPosture: "normal",
+          commandsIssued: 1,
+          commandsSkipped: 0,
+          commandsFailed: 0,
+          commandsSuppressed: 0,
+          failClosedTriggered: false,
+          nextCycleExecutionCaution: "caution",
+          householdObjectiveConfidence: "mixed",
+          schemaVersion: "cycle-heartbeat.v1",
+        },
+        recentCycleHeartbeats: [
+          {
+            entryKind: "cycle_heartbeat",
+            cycleId: "cycle-api-1",
+            recordedAt: "2026-03-16T12:20:00.000Z",
+            executionPosture: "normal",
+            commandsIssued: 1,
+            commandsSkipped: 0,
+            commandsFailed: 0,
+            commandsSuppressed: 0,
+            failClosedTriggered: false,
+            nextCycleExecutionCaution: "caution",
+            householdObjectiveConfidence: "mixed",
+            schemaVersion: "cycle-heartbeat.v1",
+          },
+        ],
+        recentExecutionOutcomes: [
+          {
+            entryId: "entry-api-1",
+            cycleId: "cycle-api-1",
+            recordedAt: "2026-03-16T12:20:00.000Z",
+            executionRequestId: "request-api-1",
+            idempotencyKey: "key-api-1",
+            targetDeviceId: "battery",
+            canonicalCommand: {
+              commandId: "cmd-api-1",
+              targetDeviceId: "battery",
+              kind: "set_mode",
+              mode: "charge",
+              effectiveWindow: {
+                startAt: "2026-03-16T12:20:00.000Z",
+                endAt: "2026-03-16T12:50:00.000Z",
+              },
+            },
+            status: "issued",
+            executionConfidence: "confirmed",
+            telemetryCoherence: "coherent",
+            stage: "dispatch",
+            schemaVersion: "execution-journal.v1",
+          },
+        ],
+      }),
+    } as Response);
+
+    render(<SimplifiedDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Caution: caution")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "History" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Result: Sent").length).toBeGreaterThan(0);
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/runtime-truth",
+      expect.objectContaining({ headers: { Accept: "application/json" } }),
+    );
   });
 });

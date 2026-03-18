@@ -14,6 +14,7 @@ import type { DeviceShadowStore } from "../../shadow/deviceShadowStore";
 import { projectExecutionToDeviceShadow } from "./projectExecutionToDeviceShadow";
 import type { ExecutionJournalStore } from "../../journal/executionJournalStore";
 import type {
+  DecisionExplainedJournalEntry,
   ExecutionCycleDecisionSummary,
   ExecutionCycleFinancialContext,
 } from "../../journal/executionJournal";
@@ -25,6 +26,7 @@ import type {
 import { projectExecutionOutcome } from "./projectExecutionOutcome";
 import { classifyRuntimeExecutionPosture } from "./classifyRuntimeExecutionPosture";
 import type { EconomicPrerejection, RejectedOpportunity } from "./pipelineTypes";
+import type { EligibleOpportunity } from "./pipelineTypes";
 import { buildExecutionEdgeContextsFromRequests } from "./edge/buildExecutionRequestsFromPlan";
 import { adaptLegacyExecutionRequests } from "./edge/legacyExecutionCompatibilityAdapter";
 import {
@@ -51,7 +53,7 @@ import type {
   RuntimeJournalProjectionPayload,
   RuntimeOutcomeProjectionRecord,
 } from "./runtimeJournalProjectionPayload";
-import { pushRecentExecutionOutcomes, setLatestCycleHeartbeat } from "../../journal/latestCycleHeartbeatSource";
+import { generateDecisionExplanation } from "./generateDecisionExplanation";
 
 export interface ControlLoopExecutionServiceResult {
   controlLoopResult: ControlLoopResult;
@@ -192,11 +194,10 @@ function buildCompatibilityExecutionEdgeContexts(params: {
 function persistJournalProjection(
   journalStore: ExecutionJournalStore | undefined,
   projection: ReturnType<typeof projectJournal>,
+  decisionExplanationEntries: DecisionExplainedJournalEntry[] = [],
 ): void {
-  // First real publisher into the shared heartbeat source.
-  // Canonical heartbeat truth originates from runtime/journal projection here; UI only subscribes.
-  setLatestCycleHeartbeat(projection.cycleHeartbeat);
-  pushRecentExecutionOutcomes(projection.journalEntries);
+  // Removed the previous publisher logic as it is no longer needed.
+  // The journal entries will be persisted directly.
 
   if (!journalStore) {
     return;
@@ -206,7 +207,169 @@ function persistJournalProjection(
     journalStore.append(entry);
   });
 
+  decisionExplanationEntries.forEach((entry) => {
+    try {
+      journalStore.appendDecisionExplanation(entry);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[runControlLoopExecutionService] Failed to append decision explanation for ${entry.opportunityId}: ${message}`,
+      );
+    }
+  });
+
   journalStore.appendHeartbeat(projection.cycleHeartbeat);
+}
+
+function buildOpportunityMetadataIndex(params: {
+  eligibleOpportunities: EligibleOpportunity[];
+  contextByOpportunityId: Map<string, {
+    decisionId?: string;
+    targetDeviceId: string;
+  }>;
+}): Map<string, { decisionId?: string; targetDeviceId?: string }> {
+  const index = new Map<string, { decisionId?: string; targetDeviceId?: string }>();
+
+  params.eligibleOpportunities.forEach((opportunity) => {
+    index.set(opportunity.opportunityId, {
+      decisionId: opportunity.decisionId,
+      targetDeviceId: opportunity.targetDeviceId,
+    });
+  });
+
+  params.contextByOpportunityId.forEach((context, opportunityId) => {
+    if (!index.has(opportunityId)) {
+      index.set(opportunityId, {
+        decisionId: context.decisionId,
+        targetDeviceId: context.targetDeviceId,
+      });
+    }
+  });
+
+  return index;
+}
+
+function buildDecisionExplanationEntries(params: {
+  recordedAt: string;
+  cycleId?: string;
+  executionPosture: RuntimeExecutionPosture;
+  selectedOpportunities: EligibleOpportunity[];
+  rejectedOpportunities: RejectedOpportunity[];
+  cycleFinancialContext?: ExecutionCycleFinancialContext;
+  opportunityMetadataById: Map<string, { decisionId?: string; targetDeviceId?: string }>;
+}): DecisionExplainedJournalEntry[] {
+  const entries: DecisionExplainedJournalEntry[] = [];
+
+  const safePush = (builder: () => DecisionExplainedJournalEntry): void => {
+    try {
+      entries.push(builder());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[runControlLoopExecutionService] Failed to generate decision explanation: ${message}`);
+    }
+  };
+
+  const byDecisionId = new Map(
+    (params.cycleFinancialContext?.decisionsTaken ?? []).map((decision) => [decision.decisionId, decision]),
+  );
+
+  params.selectedOpportunities.forEach((opportunity) => {
+    safePush(() => {
+      const decisionSummary = opportunity.decisionId
+        ? byDecisionId.get(opportunity.decisionId)
+        : undefined;
+
+      return {
+        type: "decision.explained",
+        opportunityId: opportunity.opportunityId,
+        timestamp: params.recordedAt,
+        decision: opportunity.matchedDecisionAction ?? opportunity.canonicalCommand.kind,
+        explanation: generateDecisionExplanation(
+          {
+            opportunityId: opportunity.opportunityId,
+            decisionType: opportunity.matchedDecisionAction ?? opportunity.canonicalCommand.kind,
+            targetDeviceId: opportunity.targetDeviceId,
+            decisionReason:
+              decisionSummary?.decisionReason
+              ?? "Selected as the canonical executable opportunity for this cycle.",
+            planningConfidenceLevel:
+              decisionSummary?.planningConfidenceLevel
+              ?? params.cycleFinancialContext?.planningConfidenceLevel,
+            conservativeAdjustmentApplied:
+              decisionSummary?.conservativeAdjustmentApplied
+              ?? params.cycleFinancialContext?.conservativeAdjustmentApplied,
+            conservativeAdjustmentReason:
+              decisionSummary?.conservativeAdjustmentReason
+              ?? params.cycleFinancialContext?.conservativeAdjustmentReason,
+            economicSignals: {
+              effectiveStoredEnergyValuePencePerKwh: opportunity.economicCandidate?.effectiveStoredEnergyValue,
+              netStoredEnergyValuePencePerKwh: opportunity.economicCandidate?.netStoredEnergyValue,
+              marginalImportAvoidancePencePerKwh: opportunity.economicCandidate?.marginalImportAvoidance,
+              exportValuePencePerKwh: opportunity.economicCandidate?.marginalExportValue,
+            },
+          },
+          {
+            executionPosture: params.executionPosture,
+          },
+        ),
+        cycleId: params.cycleId,
+        decisionId: opportunity.decisionId,
+        targetDeviceId: opportunity.targetDeviceId,
+        schemaVersion: "decision-explained.v1",
+      };
+    });
+  });
+
+  params.rejectedOpportunities.forEach((rejected) => {
+    safePush(() => {
+      const metadata = params.opportunityMetadataById.get(rejected.opportunityId);
+      const decisionSummary = rejected.decisionId
+        ? byDecisionId.get(rejected.decisionId)
+        : metadata?.decisionId
+          ? byDecisionId.get(metadata.decisionId)
+          : undefined;
+
+      return {
+        type: "decision.explained",
+        opportunityId: rejected.opportunityId,
+        timestamp: params.recordedAt,
+        decision: `rejected_${rejected.stage}`,
+        explanation: generateDecisionExplanation(
+          {
+            opportunityId: rejected.opportunityId,
+            decisionType: `rejected_${rejected.stage}`,
+            targetDeviceId: rejected.targetDeviceId ?? metadata?.targetDeviceId,
+            decisionReason: rejected.decisionReason,
+            reasonCodes: rejected.reasonCodes,
+            planningConfidenceLevel:
+              decisionSummary?.planningConfidenceLevel
+              ?? params.cycleFinancialContext?.planningConfidenceLevel,
+            conservativeAdjustmentApplied:
+              decisionSummary?.conservativeAdjustmentApplied
+              ?? params.cycleFinancialContext?.conservativeAdjustmentApplied,
+            conservativeAdjustmentReason:
+              decisionSummary?.conservativeAdjustmentReason
+              ?? params.cycleFinancialContext?.conservativeAdjustmentReason,
+            economicSignals: {
+              effectiveStoredEnergyValuePencePerKwh: decisionSummary?.effectiveStoredEnergyValue,
+              netStoredEnergyValuePencePerKwh: decisionSummary?.netStoredEnergyValue,
+              marginalImportAvoidancePencePerKwh: decisionSummary?.marginalImportAvoidance,
+              exportValuePencePerKwh: decisionSummary?.marginalExportValue,
+            },
+          },
+          {
+            executionPosture: params.executionPosture,
+          },
+        ),
+        cycleId: params.cycleId,
+        decisionId: rejected.decisionId ?? metadata?.decisionId,
+        targetDeviceId: rejected.targetDeviceId ?? metadata?.targetDeviceId,
+        schemaVersion: "decision-explained.v1",
+      };
+    });
+  });
+
+  return entries;
 }
 
 /**
@@ -495,7 +658,7 @@ export async function runControlLoopExecutionService(
       canonicalRuntimeSignals,
     });
     const journalProjection = projectJournal(runtimeJournalProjectionPayload);
-    persistJournalProjection(journalStore, journalProjection);
+    persistJournalProjection(journalStore, journalProjection, []);
 
     return {
       controlLoopResult,
@@ -615,7 +778,21 @@ export async function runControlLoopExecutionService(
     canonicalRuntimeSignals,
   });
   const journalProjection = projectJournal(runtimeJournalProjectionPayload);
-  persistJournalProjection(journalStore, journalProjection);
+  const opportunityMetadataById = buildOpportunityMetadataIndex({
+    eligibleOpportunities,
+    contextByOpportunityId,
+  });
+  const canonicalRejectedOpportunities = executedPlan.execution.rejectedOpportunities;
+  const decisionExplanationEntries = buildDecisionExplanationEntries({
+    recordedAt: input.now,
+    cycleId: cycleHeartbeatMeta?.cycleId,
+    executionPosture,
+    selectedOpportunities: executionPlanStage.dispatchableOpportunities,
+    rejectedOpportunities: canonicalRejectedOpportunities,
+    cycleFinancialContext: enrichedCycleFinancialContext,
+    opportunityMetadataById,
+  });
+  persistJournalProjection(journalStore, journalProjection, decisionExplanationEntries);
 
   if (shadowStore) {
     const contextByExecutionId = new Map(

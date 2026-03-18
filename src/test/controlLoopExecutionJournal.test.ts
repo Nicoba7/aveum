@@ -10,15 +10,11 @@ import type {
 import { InMemoryDeviceCapabilitiesProvider } from "../capabilities/deviceCapabilitiesProvider";
 import { InMemoryDeviceShadowStore } from "../shadow/deviceShadowStore";
 import { InMemoryExecutionJournalStore } from "../journal/executionJournalStore";
-import {
-  getLatestCycleHeartbeat,
-  getRecentExecutionOutcomes,
-  setLatestCycleHeartbeat,
-} from "../journal/latestCycleHeartbeatSource";
-
-afterEach(() => {
-  setLatestCycleHeartbeat(undefined);
-});
+import type {
+  CycleHeartbeatEntry,
+  DecisionExplainedJournalEntry,
+  ExecutionJournalEntry,
+} from "../journal/executionJournal";
 
 function buildSystemState(): SystemState {
   return {
@@ -118,7 +114,7 @@ function buildCapabilitiesProvider() {
 }
 
 describe("runControlLoopExecutionService journal", () => {
-  it("publishes finalized cycle heartbeat to the shared latest-cycle source", async () => {
+  it("persists finalized cycle heartbeat and outcomes to the journal store", async () => {
     const execute = vi.fn(async (requests: CommandExecutionRequest[]) =>
       requests.map((request): CommandExecutionResult => ({
         executionRequestId: request.executionRequestId,
@@ -132,6 +128,7 @@ describe("runControlLoopExecutionService journal", () => {
       })),
     );
     const executor: DeviceCommandExecutor = { execute };
+    const journal = new InMemoryExecutionJournalStore();
 
     await runControlLoopExecutionService(
       {
@@ -150,17 +147,110 @@ describe("runControlLoopExecutionService journal", () => {
       },
       executor,
       buildCapabilitiesProvider(),
+      undefined,
+      journal,
     );
 
-    const latestHeartbeat = getLatestCycleHeartbeat();
+    const heartbeats = journal.getCycleHeartbeats();
+    expect(heartbeats).toHaveLength(1);
+    const latestHeartbeat = heartbeats[0];
     expect(latestHeartbeat).toBeDefined();
     expect(latestHeartbeat?.entryKind).toBe("cycle_heartbeat");
     expect(latestHeartbeat?.recordedAt).toBe("2026-03-16T10:05:00.000Z");
     expect(latestHeartbeat?.nextCycleExecutionCaution).toBe("normal");
 
-    const recentExecutionOutcomes = getRecentExecutionOutcomes();
+    const recentExecutionOutcomes = journal.getAll();
     expect(recentExecutionOutcomes.length).toBeGreaterThan(0);
     expect(recentExecutionOutcomes[0].recordedAt).toBe("2026-03-16T10:05:00.000Z");
+
+    const explanations = journal.getDecisionExplanations();
+    expect(explanations.length).toBeGreaterThan(0);
+    expect(explanations[0].type).toBe("decision.explained");
+    expect(explanations[0].opportunityId).toBeDefined();
+    expect(explanations[0].explanation.summary.length).toBeGreaterThan(0);
+    expect(explanations[0].explanation.drivers.length).toBeGreaterThanOrEqual(2);
+    expect(explanations[0].explanation.drivers.length).toBeLessThanOrEqual(5);
+  });
+
+  it("appends decision explanations after decision journal entries and does not block on explanation persistence failure", async () => {
+    const execute = vi.fn(async (requests: CommandExecutionRequest[]) =>
+      requests.map((request): CommandExecutionResult => ({
+        executionRequestId: request.executionRequestId,
+        requestId: request.requestId,
+        idempotencyKey: request.idempotencyKey,
+        decisionId: request.decisionId,
+        targetDeviceId: request.targetDeviceId,
+        commandId: request.commandId,
+        deviceId: request.targetDeviceId,
+        status: "issued",
+      })),
+    );
+    const executor: DeviceCommandExecutor = { execute };
+
+    const order: string[] = [];
+    const warnings: string[] = [];
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation((message) => {
+      warnings.push(String(message));
+    });
+
+    class RecordingStore extends InMemoryExecutionJournalStore {
+      override append(entry: ExecutionJournalEntry): void {
+        order.push("append");
+        super.append(entry);
+      }
+
+      override appendDecisionExplanation(entry: DecisionExplainedJournalEntry): void {
+        order.push("appendDecisionExplanation");
+        throw new Error(`intentional explanation append failure for ${entry.opportunityId}`);
+      }
+
+      override appendHeartbeat(entry: CycleHeartbeatEntry): void {
+        order.push("appendHeartbeat");
+        super.appendHeartbeat(entry);
+      }
+    }
+
+    const journal = new RecordingStore();
+
+    try {
+      await runControlLoopExecutionService(
+        {
+          now: "2026-03-16T10:05:00.000Z",
+          systemState: buildSystemState(),
+          optimizerOutput: buildOutput([
+            {
+              commandId: "cmd-1",
+              deviceId: "battery",
+              issuedAt: "2026-03-16T10:00:00.000Z",
+              type: "set_mode",
+              mode: "charge",
+              effectiveWindow: { startAt: "2026-03-16T10:00:00.000Z", endAt: "2026-03-16T10:30:00.000Z" },
+            },
+          ]),
+        },
+        executor,
+        buildCapabilitiesProvider(),
+        undefined,
+        journal,
+      );
+
+      expect(journal.getAll().length).toBeGreaterThan(0);
+      expect(journal.getCycleHeartbeats().length).toBe(1);
+      expect(order).toContain("append");
+      expect(order).toContain("appendDecisionExplanation");
+      expect(order).toContain("appendHeartbeat");
+
+      const firstDecisionIndex = order.indexOf("append");
+      const firstExplanationIndex = order.indexOf("appendDecisionExplanation");
+      const heartbeatIndex = order.indexOf("appendHeartbeat");
+      expect(firstDecisionIndex).toBeGreaterThanOrEqual(0);
+      expect(firstExplanationIndex).toBeGreaterThan(firstDecisionIndex);
+      expect(heartbeatIndex).toBeGreaterThan(firstExplanationIndex);
+
+      expect(warnings.some((message) => message.includes("Failed to append decision explanation"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("adapts command-only dispatch to canonical opportunity identity without partial authority mode", async () => {
@@ -291,6 +381,13 @@ describe("runControlLoopExecutionService journal", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].stage).toBe("preflight_validation");
     expect(entries[0].reasonCodes).toContain("CAPABILITIES_NOT_FOUND");
+
+    const explanations = journal.getDecisionExplanations();
+    const rejectedExplanations = explanations.filter(
+      (entry) => entry.decision.startsWith("rejected_"),
+    );
+    expect(rejectedExplanations).toHaveLength(1);
+    expect(rejectedExplanations[0].opportunityId).toBe(entries[0].opportunityId);
   });
 
   it("records journal entry for reconciliation skip", async () => {

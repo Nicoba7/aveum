@@ -190,3 +190,31 @@ export interface ExecutionJournalEntry {
   economicArbitration?: ExecutionEconomicArbitrationTrace;
   schemaVersion: string;
 }
+
+export type DecisionExplanationConfidence = "low" | "medium" | "high";
+
+export interface DecisionExplanation {
+  summary: string;
+  drivers: string[];
+  confidence: DecisionExplanationConfidence;
+  confidence_reason: string;
+  caution?: string | null;
+}
+
+/**
+ * Canonical append-only explanation entry for runtime opportunity decisions.
+ *
+ * Explanations are derived inside runtime only and persisted as immutable
+ * evidence. They are never recomputed by projection, API, or UI layers.
+ */
+export interface DecisionExplainedJournalEntry {
+  type: "decision.explained";
+  opportunityId: string;
+  timestamp: string;
+  decision: string;
+  explanation: DecisionExplanation;
+  cycleId?: string;
+  decisionId?: string;
+  targetDeviceId?: string;
+  schemaVersion: "decision-explained.v1";
+}

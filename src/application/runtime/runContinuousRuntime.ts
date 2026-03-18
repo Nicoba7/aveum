@@ -4,6 +4,7 @@ import type { IntervalScheduler } from "../continuousLoop/intervalScheduler";
 import { FileExecutionJournalStore } from "../../journal/fileExecutionJournalStore";
 import type { ExecutionJournalStore } from "../../journal/executionJournalStore";
 import type { RuntimeExecutionMode } from "../controlLoopExecution/executionPolicyTypes";
+import { resolveJournalDirectoryPath } from "../../journal/journalDirectory";
 
 export interface GridlyContinuousRuntimeSource {
   GRIDLY_SITE_ID?: string;
@@ -77,8 +78,15 @@ function resolveLoopConfig(source: GridlyContinuousRuntimeSource): ContinuousLoo
   };
 }
 
+export function resolveContinuousRuntimeJournalDirectory(
+  source: GridlyContinuousRuntimeSource = process.env,
+  options?: { cwd?: string },
+): string {
+  return resolveJournalDirectoryPath(source, options);
+}
+
 function buildDefaultJournalStore(source: GridlyContinuousRuntimeSource): ExecutionJournalStore {
-  const directoryPath = source.GRIDLY_JOURNAL_DIR?.trim() || ".gridly/journal";
+  const directoryPath = resolveContinuousRuntimeJournalDirectory(source);
   return new FileExecutionJournalStore({ directoryPath });
 }
 

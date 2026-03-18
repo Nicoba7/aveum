@@ -1,11 +1,16 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CycleHeartbeatEntry, ExecutionJournalEntry } from "./executionJournal";
+import type {
+  CycleHeartbeatEntry,
+  DecisionExplainedJournalEntry,
+  ExecutionJournalEntry,
+} from "./executionJournal";
 import type { ExecutionJournalStore } from "./executionJournalStore";
 
 export interface FileExecutionJournalStoreOptions {
   directoryPath: string;
   executionEntriesFileName?: string;
+  decisionExplanationsFileName?: string;
   cycleHeartbeatsFileName?: string;
 }
 
@@ -29,11 +34,27 @@ function readNdjson<T>(path: string): T[] {
     return [];
   }
 
-  return raw
+  const entries: T[] = [];
+
+  raw
     .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as T);
+    .forEach((line, lineIndex) => {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) {
+        return;
+      }
+
+      try {
+        entries.push(JSON.parse(trimmed) as T);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[FileExecutionJournalStore] Skipping malformed NDJSON line ${lineIndex + 1} in ${path}: ${message}`,
+        );
+      }
+    });
+
+  return entries;
 }
 
 /**
@@ -44,15 +65,18 @@ function readNdjson<T>(path: string): T[] {
  */
 export class FileExecutionJournalStore implements ExecutionJournalStore {
   private readonly executionEntriesPath: string;
+  private readonly decisionExplanationsPath: string;
   private readonly cycleHeartbeatsPath: string;
 
   constructor(options: FileExecutionJournalStoreOptions) {
     ensureDirectory(options.directoryPath);
 
     const executionEntriesFileName = options.executionEntriesFileName ?? "execution-journal.ndjson";
+    const decisionExplanationsFileName = options.decisionExplanationsFileName ?? "decision-explained.ndjson";
     const cycleHeartbeatsFileName = options.cycleHeartbeatsFileName ?? "cycle-heartbeat.ndjson";
 
     this.executionEntriesPath = join(options.directoryPath, executionEntriesFileName);
+    this.decisionExplanationsPath = join(options.directoryPath, decisionExplanationsFileName);
     this.cycleHeartbeatsPath = join(options.directoryPath, cycleHeartbeatsFileName);
   }
 
@@ -70,6 +94,14 @@ export class FileExecutionJournalStore implements ExecutionJournalStore {
 
   getByDecisionId(decisionId: string): ExecutionJournalEntry[] {
     return this.getAll().filter((entry) => entry.decisionId === decisionId);
+  }
+
+  appendDecisionExplanation(entry: DecisionExplainedJournalEntry): void {
+    appendNdjsonLine(this.decisionExplanationsPath, entry);
+  }
+
+  getDecisionExplanations(): DecisionExplainedJournalEntry[] {
+    return readNdjson<DecisionExplainedJournalEntry>(this.decisionExplanationsPath);
   }
 
   appendHeartbeat(entry: CycleHeartbeatEntry): void {
