@@ -57,7 +57,7 @@ export type AIInsightViewModel = {
 
 export type OptimisationModeViewModel = {
   mode: OptimisationMode;
-  options: { id: OptimisationMode; label: string; description: string }[];
+  options: { id: OptimisationMode; label: string; description: string; behaviorSignal: string }[];
 };
 
 export function getBarColor(p: number) {
@@ -631,17 +631,20 @@ export function buildOptimisationModeViewModel(mode: OptimisationMode): Optimisa
       {
         id: "CHEAPEST" as const,
         label: "Cheapest",
-        description: "Lower bills, more charge cycles.",
+        description: "Lowest cost",
+        behaviorSignal: "More battery cycling • low-tariff first",
       },
       {
         id: "BALANCED" as const,
         label: "Balanced",
-        description: "Savings with battery protection.",
+        description: "Savings with battery care",
+        behaviorSignal: "Moderate cycling • steadier behaviour",
       },
       {
         id: "GREENEST" as const,
         label: "Greenest",
-        description: "Cleaner energy, less grid import.",
+        description: "More solar, less grid",
+        behaviorSignal: "Self-consumption first • costs may be higher",
       },
     ],
   };

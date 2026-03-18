@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   buildHomeOptimizerInput,
   buildHomeUiViewModel,
@@ -24,7 +24,9 @@ import { ENERGY_COLORS } from "./energyColors";
 import { FlowConnector, FlowNode } from "./flowPrimitives";
 import { TIMELINE_EMPHASIS_TOKENS, timelineDotGlow } from "./timelineEmphasisTokens";
 import DecisionExplanationSheet from "./DecisionExplanationSheet";
+import { buildRuntimeGroundedExplanationLines } from "../lib/decisionExplanationPresentation";
 import { buildDecisionExplanation } from "../lib/decisionExplanation";
+import { buildDecisionFreshnessViewModel, DECISION_FRESHNESS_TOOLTIP } from "../lib/decisionFreshness";
 import { buildHomeRuntimeReadModel } from "../features/home/homeRuntimeReadModel";
 import type { CycleHeartbeatEntry, DecisionExplainedJournalEntry } from "../journal/executionJournal";
 
@@ -616,6 +618,18 @@ export default function HomeTab({
   latestCycleHeartbeat,
   recentDecisionExplanations = [],
 }: HomeTabProps) {
+  const [freshnessNowMs, setFreshnessNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const intervalId = globalThis.setInterval(() => {
+      setFreshnessNowMs(Date.now());
+    }, 5000);
+
+    return () => {
+      globalThis.clearInterval(intervalId);
+    };
+  }, []);
+
   const hasBattery = connectedDevices.some((device) => device.id === "battery");
   const hasEV = connectedDevices.some((device) => device.id === "ev");
   const hasSolar = connectedDevices.some((device) => device.id === "solar");
@@ -710,7 +724,15 @@ export default function HomeTab({
     canonicalAction: homeOptimizerView.currentAction,
   });
   const explanationDrivers = latestDecisionExplanation?.drivers ?? [];
-  const displayedExplanationDrivers = explanationDrivers.slice(0, 3);
+  const runtimeGroundedExplanationLines = buildRuntimeGroundedExplanationLines({
+    drivers: explanationDrivers,
+    confidence: latestDecisionExplanation?.confidence,
+  });
+  const freshnessViewModel = buildDecisionFreshnessViewModel(
+    latestDecisionExplanationEntry?.timestamp,
+    freshnessNowMs,
+    "last-decision"
+  );
   const homeValueSavings = homeOptimizerView.value.savingsToday > 0
     ? homeOptimizerView.value.savingsToday
     : SANDBOX.savedToday;
@@ -740,7 +762,25 @@ export default function HomeTab({
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <div style={{ width: 6, height: 6, borderRadius: "50%", background: heroColor, boxShadow: `0 0 8px ${heroColor}, 0 0 16px ${heroColor}50` }} />
             <span style={{ fontSize: 11, color: "#4B5563", fontWeight: 600, letterSpacing: 0.8 }}>CURRENT DECISION</span>
-            <span style={{ fontSize: 9, color: "#6E819B", marginLeft: "auto", border: "1px solid #1B293D", borderRadius: 999, padding: "2px 8px" }}>
+            <div
+              title={DECISION_FRESHNESS_TOOLTIP}
+              aria-label={DECISION_FRESHNESS_TOOLTIP}
+              style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto" }}
+            >
+              <span
+                style={{
+                  fontSize: 8.5,
+                  color: "#5E6E85",
+                  border: "1px solid #1B293D",
+                  borderRadius: 999,
+                  padding: "2px 7px",
+                  letterSpacing: 0.25,
+                }}
+              >
+                {freshnessViewModel.label}
+              </span>
+            </div>
+            <span style={{ fontSize: 9, color: "#6E819B", border: "1px solid #1B293D", borderRadius: 999, padding: "2px 8px" }}>
               {confidenceBadge}
             </span>
             {cycleCautionBadge && (
@@ -754,10 +794,16 @@ export default function HomeTab({
             {explanationSummary}
           </div>
 
-          {displayedExplanationDrivers.length > 0 && (
+          <div style={{ marginBottom: runtimeGroundedExplanationLines.length > 0 ? 2 : 0 }}>
+            <div style={{ fontSize: 10, color: "#6F819B", fontWeight: 700, letterSpacing: 0.8, marginBottom: 4 }}>
+              WHY THIS DECISION
+            </div>
+          </div>
+
+          {runtimeGroundedExplanationLines.length > 0 && (
             <ul style={{ margin: 0, paddingLeft: 18, color: "#A8BAD2", fontSize: 12, lineHeight: 1.45 }}>
-              {displayedExplanationDrivers.map((driver, index) => (
-                <li key={`${driver}-${index}`} style={{ marginBottom: index < displayedExplanationDrivers.length - 1 ? 6 : 0 }}>{driver}</li>
+              {runtimeGroundedExplanationLines.map((line, index) => (
+                <li key={`${line}-${index}`} style={{ marginBottom: index < runtimeGroundedExplanationLines.length - 1 ? 6 : 0 }}>{line}</li>
               ))}
             </ul>
           )}

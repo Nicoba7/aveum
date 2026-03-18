@@ -150,14 +150,14 @@ function DeliveredHeroCard({
         </div>
 
         <div className="mb-3 text-[12px] leading-[1.45] text-[#7C8BA2]">
-          Gridly consistently turned solar, storage, EV timing, and tariff shifts into measurable value.
+          Value delivered through solar usage, battery timing, EV charging, and tariff optimisation.
         </div>
 
-        <div className="mb-3 flex items-center gap-2">
+        <div className="mb-3 flex flex-col items-start gap-1">
           <span className="rounded-full border border-[#1B2A40] bg-[#0C1627] px-[7px] py-[2px] text-[10px] font-semibold tracking-[0.3px] text-[#95ABC6]">
-            {freeDays}/7 consistent value days
+            {freeDays}/7 days delivered positive value
           </span>
-          <span className="text-[10px] text-[#697D96]">Reliable delivery across changing conditions.</span>
+          <span className="text-[10px] text-[#697D96]">Consistent performance across the week</span>
         </div>
 
         <div className="flex items-end gap-4 border-t border-[#162235] pt-3 tabular-nums">
@@ -231,6 +231,24 @@ function deviceDisplayName(deviceId: HistoryDeviceKey) {
   if (deviceId === "battery") return "Home battery";
   if (deviceId === "ev") return "EV charger";
   return "Smart meter";
+}
+
+function normalizeOutcomeStatusLabel(status: string): string {
+  const trimmed = status.trim();
+  if (/^failed$/i.test(trimmed)) {
+    return "Not completed";
+  }
+
+  return trimmed;
+}
+
+function normalizeDeliveredOutcomeStatusLabel(status: string): string {
+  const trimmed = status.trim();
+  if (/^skipped$/i.test(trimmed)) {
+    return "Not executed";
+  }
+
+  return normalizeOutcomeStatusLabel(trimmed);
 }
 
 function ValueContributionSection({
@@ -646,7 +664,9 @@ export default function HistoryTab({
                 LAST ACTION · {latestExecutionOutcomeDetail.recordedAtLabel} · {latestExecutionOutcomeDetail.targetDeviceId}
               </div>
               <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>Action: {latestExecutionOutcomeDetail.commandLabel}</div>
-              <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>Result: {latestExecutionOutcomeDetail.outcomeStatus}</div>
+              <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
+                Result: {normalizeOutcomeStatusLabel(latestExecutionOutcomeDetail.outcomeStatus)}
+              </div>
               {latestExecutionOutcomeDetail.executionConfidence && (
                 <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
                   Confidence: {latestExecutionOutcomeDetail.executionConfidence}
@@ -672,7 +692,7 @@ export default function HistoryTab({
                 Planned: {latestOutcomeExpectationComparison.expectedCommandLabel} on {latestOutcomeExpectationComparison.expectedTargetDeviceId}
               </div>
               <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                Delivered: {latestOutcomeExpectationComparison.actualOutcomeStatus}
+                Delivered: {normalizeDeliveredOutcomeStatusLabel(latestOutcomeExpectationComparison.actualOutcomeStatus)}
               </div>
               {latestOutcomeExpectationComparison.actualExecutionConfidence && (
                 <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
@@ -686,23 +706,32 @@ export default function HistoryTab({
               )}
             </div>
           )}
+          <div style={{ fontSize: 10.5, color: "#70839B", lineHeight: 1.45, marginBottom: 8 }}>
+            Some actions are not executed when conditions or constraints change.
+          </div>
           {/* Counters derived only from canonical recent execution journal truth.
               This is intentionally minimal and acts as a bridge to a fuller accountability-backed History surface. */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 8, marginBottom: 10 }}>
             <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#DCE6F5" }}>Issued: {recentOutcomeCounters.issued}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#DCE6F5", whiteSpace: "nowrap" }}>Issued: {recentOutcomeCounters.issued}</div>
             </div>
             <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#DCE6F5" }}>Skipped: {recentOutcomeCounters.skipped}</div>
+              <div
+                title="Skipped — conditions not met"
+                aria-label="Skipped — conditions not met"
+                style={{ fontSize: 11, fontWeight: 700, color: "#DCE6F5", whiteSpace: "nowrap" }}
+              >
+                Skipped: {recentOutcomeCounters.skipped}
+              </div>
             </div>
             <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#DCE6F5" }}>Failed: {recentOutcomeCounters.failed}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#DCE6F5", whiteSpace: "nowrap" }}>Not run: {recentOutcomeCounters.failed}</div>
             </div>
             <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#DCE6F5" }}>Confirmed: {recentOutcomeCounters.evidenceConfirmed}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#DCE6F5", whiteSpace: "nowrap" }}>Confirmed: {recentOutcomeCounters.evidenceConfirmed}</div>
             </div>
             <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#DCE6F5" }}>Uncertain: {recentOutcomeCounters.evidenceUncertain}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#DCE6F5", whiteSpace: "nowrap" }}>Uncertain: {recentOutcomeCounters.evidenceUncertain}</div>
             </div>
           </div>
           {/* Canonical execution/journal truth only, rendered minimally.
@@ -714,7 +743,7 @@ export default function HistoryTab({
                   {item.recordedAtLabel} · {item.targetDeviceId}
                 </div>
                 <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                  Result: {item.status}
+                  Result: {normalizeOutcomeStatusLabel(item.status)}
                 </div>
                 {item.executionConfidence && (
                   <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>

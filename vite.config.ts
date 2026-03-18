@@ -13,6 +13,10 @@ import {
   writePersistedPlanningStyle,
   type PlanningStyleSourceEnvironment,
 } from "./src/application/runtime/planningStyleStore";
+import {
+  runDevSingleRunLocal,
+  type DevLocalSingleRunSource,
+} from "./src/application/runtime/runDevSingleRunLocal";
 
 function runtimeTruthApiPlugin(journalDirectoryPath: string): Plugin {
   return {
@@ -97,6 +101,59 @@ function planningStyleApiPlugin(sourceEnvironment: PlanningStyleSourceEnvironmen
   };
 }
 
+function devSingleRunApiPlugin(sourceEnvironment: DevLocalSingleRunSource, journalDirectoryPath: string): Plugin {
+  return {
+    name: "dev-single-run-api-bridge",
+    configureServer(server) {
+      server.middlewares.use("/api/dev/run-single-run", (req, res) => {
+        const sendJson = (statusCode: number, payload: unknown) => {
+          res.statusCode = statusCode;
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("Cache-Control", "no-store");
+          res.end(JSON.stringify(payload));
+        };
+
+        if (req.method !== "POST") {
+          sendJson(405, { error: "Method not allowed" });
+          return;
+        }
+
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          void (async () => {
+            try {
+              const parsed = JSON.parse(body || "{}") as {
+                planningStyle?: string;
+                scenario?: string;
+              };
+              const planningStyle = resolvePlanningStyleFromValue(parsed.planningStyle);
+
+              const summary = await runDevSingleRunLocal({
+                ...sourceEnvironment,
+                GRIDLY_JOURNAL_DIR: journalDirectoryPath,
+                GRIDLY_PLANNING_STYLE: planningStyle,
+                GRIDLY_DEV_SCENARIO:
+                  parsed.scenario?.trim()
+                  || sourceEnvironment.GRIDLY_DEV_SCENARIO
+                  || "planning-style-contrast",
+              });
+
+              sendJson(summary.status === "ok" ? 200 : 500, summary);
+            } catch (error) {
+              sendJson(500, {
+                error: error instanceof Error ? error.message : "Failed to run local dev cycle",
+              });
+            }
+          })();
+        });
+      });
+    },
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -114,6 +171,7 @@ export default defineConfig(({ mode }) => {
       react(),
       runtimeTruthApiPlugin(journalDirectoryPath),
       planningStyleApiPlugin(env),
+      mode === "development" && devSingleRunApiPlugin(env, journalDirectoryPath),
       mode === "development" && componentTagger(),
     ].filter(Boolean),
     resolve: {

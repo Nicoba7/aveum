@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAgileRates } from "../hooks/useAgileRates";
+import { replaceRuntimeTruthSnapshot } from "../journal/latestCycleHeartbeatSource";
 import type { CycleHeartbeatEntry, DecisionExplainedJournalEntry, ExecutionJournalEntry } from "../journal/executionJournal";
 import { SANDBOX, type DeviceConfig } from "../pages/SimplifiedDashboard";
 import {
@@ -8,6 +9,8 @@ import {
   type LegacyConnectedDeviceId,
   type LegacyPlanningStyle,
 } from "../optimizer";
+import { buildRuntimeGroundedExplanationLines } from "../lib/decisionExplanationPresentation";
+import { buildDecisionFreshnessViewModel, DECISION_FRESHNESS_TOOLTIP } from "../lib/decisionFreshness";
 import { buildOptimisationModeViewModel, buildPriceWindowsViewModel, groupDisplaySessions, selectDisplaySessions } from "./plan/planViewModels";
 import PlanEnergyFlowCard from "./plan/PlanEnergyFlowCard";
 import PriceWindowsCard from "./plan/PriceWindowsCard";
@@ -31,6 +34,7 @@ interface UpcomingDecisionViewModel {
   drivers: string[];
   confidence: string;
   timestamp: string;
+  observedAt: string;
 }
 
 function toTimestamp(value: string | undefined, fallback: number): number {
@@ -185,6 +189,35 @@ function buildUpcomingDecisionViewModels(
     .slice(0, 6);
 }
 
+async function forceRefreshRuntimeTruthSnapshot(): Promise<void> {
+  if (typeof globalThis.fetch !== "function") {
+    return;
+  }
+
+  const response = await globalThis.fetch(`/api/runtime-truth?refresh=${Date.now()}`, {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to refresh runtime truth");
+  }
+
+  const payload = await response.json() as {
+    latestCycleHeartbeat?: CycleHeartbeatEntry;
+    recentCycleHeartbeats?: CycleHeartbeatEntry[];
+    recentExecutionOutcomes?: ExecutionJournalEntry[];
+    recentDecisionExplanations?: DecisionExplainedJournalEntry[];
+  };
+
+  replaceRuntimeTruthSnapshot({
+    latestCycleHeartbeat: payload.latestCycleHeartbeat,
+    recentCycleHeartbeats: Array.isArray(payload.recentCycleHeartbeats) ? payload.recentCycleHeartbeats : [],
+    recentExecutionOutcomes: Array.isArray(payload.recentExecutionOutcomes) ? payload.recentExecutionOutcomes : [],
+    recentDecisionExplanations: Array.isArray(payload.recentDecisionExplanations) ? payload.recentDecisionExplanations : [],
+  });
+}
+
 export default function PlanTab({
   connectedDevices,
   now,
@@ -193,14 +226,43 @@ export default function PlanTab({
   recentExecutionOutcomes,
 }: PlanTabProps) {
   const { rates } = useAgileRates();
+  const planningStyleControlsRef = useRef<HTMLDivElement | null>(null);
   const currentSlot = Math.min(Math.floor((now.getHours() * 60 + now.getMinutes()) / 30), 47);
   const [configuredPlanningStyle, setConfiguredPlanningStyle] = useState<LegacyPlanningStyle>("BALANCED");
-  const upcomingDecisions = useMemo(
-    () => buildUpcomingDecisionViewModels(recentDecisionExplanations, recentExecutionOutcomes, now),
-    [recentDecisionExplanations, recentExecutionOutcomes, now]
+  const [isRunningUpdatedPlan, setIsRunningUpdatedPlan] = useState(false);
+  const [freshnessNowMs, setFreshnessNowMs] = useState(() => Date.now());
+  const primaryDecision = useMemo(
+    () => {
+      const latestExplanation = recentDecisionExplanations[0];
+      if (!latestExplanation) {
+        return undefined;
+      }
+
+      const matchingEntry = recentExecutionOutcomes
+        .filter((entry) => entry.opportunityId === latestExplanation.opportunityId)
+        .slice()
+        .sort((left, right) => toTimestamp(right.recordedAt, 0) - toTimestamp(left.recordedAt, 0))[0];
+
+      return {
+        key: `${latestExplanation.opportunityId}:${latestExplanation.timestamp}`,
+        actionHeadline: resolveActionHeadline(latestExplanation.explanation.summary, latestExplanation.decision),
+        drivers: latestExplanation.explanation.drivers,
+        confidence: latestExplanation.explanation.confidence,
+        timestamp: matchingEntry?.canonicalCommand.effectiveWindow.startAt ?? latestExplanation.timestamp,
+        observedAt: latestExplanation.timestamp,
+      } satisfies UpcomingDecisionViewModel;
+    },
+    [recentDecisionExplanations, recentExecutionOutcomes]
   );
   const runtimeAppliedPlanningStyle = mapRuntimePlanningStyleToLegacy(latestCycleHeartbeat?.economicSnapshot?.planningStyle);
   const planningStyle = runtimeAppliedPlanningStyle ?? configuredPlanningStyle;
+  const runtimeGroundedExplanationLines = primaryDecision
+    ? buildRuntimeGroundedExplanationLines({
+      drivers: primaryDecision.drivers,
+      confidence: primaryDecision.confidence,
+    })
+    : [];
+  const freshnessViewModel = buildDecisionFreshnessViewModel(primaryDecision?.observedAt, freshnessNowMs, "last-decision");
 
   useEffect(() => {
     if (typeof globalThis.fetch !== "function") {
@@ -235,6 +297,39 @@ export default function PlanTab({
     };
   }, []);
 
+  useEffect(() => {
+    const intervalId = globalThis.setInterval(() => {
+      setFreshnessNowMs(Date.now());
+    }, 5000);
+
+    return () => {
+      globalThis.clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(() => {
+    const root = planningStyleControlsRef.current;
+    if (!root) {
+      return;
+    }
+
+    const selectorButtons = root.querySelectorAll("button:not([type])");
+    selectorButtons.forEach((button) => {
+      button.setAttribute("type", "button");
+    });
+  }, [configuredPlanningStyle]);
+
+  const handlePlanningStyleControlsClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (!target) {
+      return;
+    }
+
+    if (target.closest("a")) {
+      event.preventDefault();
+    }
+  };
+
   const handlePlanningStyleChange = (nextStyle: LegacyPlanningStyle) => {
     setConfiguredPlanningStyle(nextStyle);
 
@@ -242,16 +337,80 @@ export default function PlanTab({
       return;
     }
 
+    const canonicalPlanningStyle = mapLegacyPlanningStyleToCanonical(nextStyle);
+
+    const runUpdatedPlan = async () => {
+      if (!import.meta.env.DEV || typeof globalThis.fetch !== "function") {
+        return;
+      }
+
+      setIsRunningUpdatedPlan(true);
+
+      try {
+        const response = await globalThis.fetch("/api/dev/run-single-run", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ planningStyle: canonicalPlanningStyle }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to run updated plan");
+        }
+      } finally {
+        setIsRunningUpdatedPlan(false);
+      }
+    };
+
     void globalThis.fetch("/api/planning-style", {
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ planningStyle: mapLegacyPlanningStyleToCanonical(nextStyle) }),
-    }).catch(() => {
-      // Selection persistence is best-effort; runtime remains the source of applied policy.
-    });
+      body: JSON.stringify({ planningStyle: canonicalPlanningStyle }),
+    })
+      .then(async () => {
+        await runUpdatedPlan();
+        await forceRefreshRuntimeTruthSnapshot();
+      })
+      .catch(() => {
+        // Selection persistence is best-effort; runtime remains the source of applied policy.
+      });
+  };
+
+  const handleRunUpdatedPlan = () => {
+    if (!import.meta.env.DEV || typeof globalThis.fetch !== "function") {
+      return;
+    }
+
+    const canonicalPlanningStyle = mapLegacyPlanningStyleToCanonical(configuredPlanningStyle);
+
+    setIsRunningUpdatedPlan(true);
+
+    void globalThis.fetch("/api/dev/run-single-run", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ planningStyle: canonicalPlanningStyle }),
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Failed to run updated plan");
+        }
+
+        await forceRefreshRuntimeTruthSnapshot();
+      })
+      .catch(() => {
+        // Keep selector state and existing runtime truth if local dev run fails.
+      })
+      .finally(() => {
+        setIsRunningUpdatedPlan(false);
+      });
   };
   const baseForecastKwh = SANDBOX?.solarForecast?.kwh ?? 0;
   const baseBatteryPct = SANDBOX?.solar?.batteryPct ?? 55;
@@ -336,7 +495,7 @@ export default function PlanTab({
         <div style={{ fontSize: 18, fontWeight: 700, color: "#F9FAFB", marginBottom: 4 }}>UPCOMING DECISIONS</div>
       </div>
 
-      {upcomingDecisions.length === 0 ? (
+      {primaryDecision === undefined ? (
         <div
           style={{
             background: "#0D1117",
@@ -352,27 +511,44 @@ export default function PlanTab({
         </div>
       ) : (
         <div style={{ display: "grid", gap: 8 }}>
-          {upcomingDecisions.map((item) => (
+          <div
+            key={primaryDecision.key}
+            style={{
+              background: "#0F1724",
+              border: "1px solid #243247",
+              borderRadius: 16,
+              padding: "12px 12px 12px",
+            }}
+          >
             <div
-              key={item.key}
               style={{
-                background: "#0F1724",
-                border: "1px solid #243247",
-                borderRadius: 16,
-                padding: "12px 12px 12px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 8,
               }}
             >
+              <div style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700, letterSpacing: 0.6 }}>
+                {formatDecisionTimestamp(primaryDecision.timestamp)}
+              </div>
               <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 8,
-                  marginBottom: 8,
-                }}
+                title={DECISION_FRESHNESS_TOOLTIP}
+                aria-label={DECISION_FRESHNESS_TOOLTIP}
+                style={{ display: "flex", alignItems: "center", gap: 6 }}
               >
-                <div style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 700, letterSpacing: 0.6 }}>
-                  {formatDecisionTimestamp(item.timestamp)}
+                <div
+                  style={{
+                    fontSize: 8.5,
+                    fontWeight: 700,
+                    color: "#5E6E85",
+                    border: "1px solid #1B293D",
+                    borderRadius: 999,
+                    padding: "2px 7px",
+                    letterSpacing: 0.25,
+                  }}
+                >
+                  {freshnessViewModel.label}
                 </div>
                 <div
                   style={{
@@ -385,25 +561,31 @@ export default function PlanTab({
                     letterSpacing: 0.35,
                   }}
                 >
-                  Confidence: {item.confidence}
+                  Confidence: {primaryDecision.confidence}
                 </div>
               </div>
-
-              <div style={{ fontSize: 22, fontWeight: 810, color: "#F3F7FF", letterSpacing: -0.35, lineHeight: 1.15, marginBottom: 8 }}>
-                {item.actionHeadline}
-              </div>
-
-              {item.drivers.length > 0 && (
-                <ul style={{ margin: 0, paddingLeft: 18, color: "#A8BAD2", fontSize: 12, lineHeight: 1.45 }}>
-                  {item.drivers.slice(0, 4).map((driver, index) => (
-                    <li key={`${item.key}:driver:${index}`} style={{ marginBottom: index < Math.min(item.drivers.length, 4) - 1 ? 6 : 0 }}>
-                      {driver}
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
-          ))}
+
+            <div style={{ fontSize: 22, fontWeight: 810, color: "#F3F7FF", letterSpacing: -0.35, lineHeight: 1.15, marginBottom: 8 }}>
+              {primaryDecision.actionHeadline}
+            </div>
+
+            <div style={{ marginBottom: runtimeGroundedExplanationLines.length > 0 ? 2 : 0 }}>
+              <div style={{ fontSize: 10, color: "#6F819B", fontWeight: 700, letterSpacing: 0.8, marginBottom: 4 }}>
+                WHY THIS DECISION
+              </div>
+            </div>
+
+            {runtimeGroundedExplanationLines.length > 0 && (
+              <ul style={{ margin: 0, paddingLeft: 18, color: "#A8BAD2", fontSize: 12, lineHeight: 1.45 }}>
+                {runtimeGroundedExplanationLines.slice(0, 4).map((line, index) => (
+                  <li key={`${primaryDecision.key}:driver:${index}`} style={{ marginBottom: index < Math.min(runtimeGroundedExplanationLines.length, 4) - 1 ? 6 : 0 }}>
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       )}
 
@@ -440,7 +622,33 @@ export default function PlanTab({
         <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 0.95, margin: "0 20px 10px" }}>
           PLANNING STYLE
         </div>
-        <OptimisationModeSelector viewModel={optimisationModeViewModel} onChange={handlePlanningStyleChange} />
+        <div ref={planningStyleControlsRef} onClickCapture={handlePlanningStyleControlsClickCapture}>
+          <OptimisationModeSelector viewModel={optimisationModeViewModel} onChange={handlePlanningStyleChange} />
+        </div>
+        {import.meta.env.DEV && (
+          <div style={{ margin: "8px 20px 0" }}>
+            <button
+              type="button"
+              onClick={handleRunUpdatedPlan}
+              disabled={isRunningUpdatedPlan}
+              style={{
+                width: "100%",
+                borderRadius: 10,
+                border: "1px solid #243247",
+                background: isRunningUpdatedPlan ? "#0C1523" : "#0F1C2D",
+                color: "#B8C7DB",
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: 0.3,
+                padding: "9px 12px",
+                cursor: isRunningUpdatedPlan ? "default" : "pointer",
+                opacity: isRunningUpdatedPlan ? 0.75 : 1,
+              }}
+            >
+              {isRunningUpdatedPlan ? "Running updated plan..." : "Run updated plan"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
