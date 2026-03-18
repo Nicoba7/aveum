@@ -1,0 +1,837 @@
+import type { ControlLoopInput, ControlLoopResult } from "../../controlLoop/controlLoop";
+import { runControlLoop } from "../../controlLoop/controlLoop";
+import type { OptimizerOpportunity } from "../../domain/optimizer";
+import type {
+  CommandExecutionRequest,
+  CommandExecutionResult,
+  DeviceCommandExecutor,
+  ExecutionEconomicArbitrationTrace,
+} from "./types";
+import { mapToCanonicalDeviceCommand } from "./canonicalCommand";
+import { buildCommandExecutionIdentity, matchDecisionForCommand } from "./identity";
+import type { DeviceCapabilitiesProvider } from "../../capabilities/deviceCapabilitiesProvider";
+import type { DeviceShadowStore } from "../../shadow/deviceShadowStore";
+import { projectExecutionToDeviceShadow } from "./projectExecutionToDeviceShadow";
+import type { ExecutionJournalStore } from "../../journal/executionJournalStore";
+import type {
+  DecisionExplainedJournalEntry,
+  ExecutionCycleDecisionSummary,
+  ExecutionCycleFinancialContext,
+} from "../../journal/executionJournal";
+import type {
+  RuntimeExecutionMode,
+  RuntimeExecutionPosture,
+  RuntimeExecutionGuardrailContext,
+} from "./executionPolicyTypes";
+import { projectExecutionOutcome } from "./projectExecutionOutcome";
+import { classifyRuntimeExecutionPosture } from "./classifyRuntimeExecutionPosture";
+import type { EconomicPrerejection, RejectedOpportunity } from "./pipelineTypes";
+import type { EligibleOpportunity } from "./pipelineTypes";
+import { buildExecutionEdgeContextsFromRequests } from "./edge/buildExecutionRequestsFromPlan";
+import { adaptLegacyExecutionRequests } from "./edge/legacyExecutionCompatibilityAdapter";
+import {
+  evaluateOpportunityEligibility,
+} from "./stages/evaluateOpportunityEligibility";
+import {
+  arbitrateDeviceOpportunities,
+  mapDeviceArbitrationPrerejections,
+} from "./stages/arbitrateDeviceOpportunities";
+import {
+  mapHouseholdDecisionPrerejections,
+  selectHouseholdDecision,
+} from "./stages/selectHouseholdDecision";
+import { buildExecutionPlan } from "./stages/buildExecutionPlan";
+import { executePlan } from "./stages/executePlan";
+import {
+  assessExecutionEvidenceCoherence,
+  summarizeExecutionEvidenceConfidence,
+  type EvidenceAnnotatedExecutionResult,
+} from "./stages/assessExecutionEvidenceCoherence";
+import { projectJournal } from "./stages/projectJournal";
+import type { CanonicalRuntimeSignals } from "./canonicalRuntimeSignals";
+import type {
+  RuntimeJournalProjectionPayload,
+  RuntimeOutcomeProjectionRecord,
+} from "./runtimeJournalProjectionPayload";
+import { generateDecisionExplanation } from "./generateDecisionExplanation";
+
+export interface ControlLoopExecutionServiceResult {
+  controlLoopResult: ControlLoopResult;
+  executionResults: CommandExecutionResult[];
+  executionPosture: RuntimeExecutionPosture;
+  executionEvidenceSummary: {
+    hasUncertainExecutionEvidence: boolean;
+  };
+  householdObjectiveSummary: {
+    objectiveMode: "savings" | "earnings" | "balanced";
+    hasExportIntent: boolean;
+    hasImportAvoidanceIntent: boolean;
+  };
+  householdObjectiveConfidence: "clear" | "mixed" | "empty";
+  /**
+   * Canonical next-cycle advisory signal derived from cycle-level execution uncertainty.
+   * Informational only — never drives policy logic or execution behavior.
+   * "caution" when hasUncertainExecutionEvidence is true, "normal" otherwise.
+   */
+  nextCycleExecutionCaution: "normal" | "caution";
+}
+
+function buildCanonicalRuntimeSignals(params: {
+  outcomes: Pick<EvidenceAnnotatedExecutionResult, "executionRequestId" | "telemetryCoherence" | "executionConfidence">[];
+  executionEvidenceSummary: {
+    hasUncertainExecutionEvidence: boolean;
+  };
+  householdObjectiveSummary: {
+    objectiveMode: "savings" | "earnings" | "balanced";
+    hasExportIntent: boolean;
+    hasImportAvoidanceIntent: boolean;
+  };
+  householdObjectiveConfidence: "clear" | "mixed" | "empty";
+}): CanonicalRuntimeSignals {
+  return {
+    outcomeSignals: params.outcomes.map((outcome) => ({
+      executionRequestId: outcome.executionRequestId,
+      telemetryCoherence: outcome.telemetryCoherence,
+      executionConfidence: outcome.executionConfidence,
+    })),
+    executionEvidenceSummary: params.executionEvidenceSummary,
+    nextCycleExecutionCaution: deriveNextCycleExecutionCaution(params.executionEvidenceSummary).nextCycleExecutionCaution,
+    householdObjectiveSummary: params.householdObjectiveSummary,
+    householdObjectiveConfidence: params.householdObjectiveConfidence,
+  };
+}
+
+function buildRuntimeJournalProjectionPayload(params: {
+  recordedAt: string;
+  executionPosture: RuntimeExecutionPosture;
+  runtimeGuardrailContext?: RuntimeExecutionGuardrailContext;
+  failClosedTriggered: boolean;
+  cycleHeartbeatMeta?: { cycleId?: string; replanReason?: string };
+  cycleFinancialContext?: ExecutionCycleFinancialContext;
+  executionPlan?: RuntimeJournalProjectionPayload["executionPlan"];
+  executionResult?: RuntimeJournalProjectionPayload["executionResult"];
+  rejectedOpportunities: RejectedOpportunity[];
+  legacyCompatibilityOutcomes: CommandExecutionResult[];
+  outcomeRecords: RuntimeOutcomeProjectionRecord[];
+  compatibilityExecutionEdgeContexts: RuntimeJournalProjectionPayload["runtimeOutcomeProjection"]["compatibilityExecutionEdgeContexts"];
+  canonicalRuntimeSignals: RuntimeJournalProjectionPayload["runtimeOutcomeProjection"]["canonicalRuntimeSignals"];
+}): RuntimeJournalProjectionPayload {
+  return {
+    recordedAt: params.recordedAt,
+    executionPosture: params.executionPosture,
+    runtimeGuardrailContext: params.runtimeGuardrailContext,
+    failClosedTriggered: params.failClosedTriggered,
+    cycleHeartbeatMeta: params.cycleHeartbeatMeta,
+    cycleFinancialContext: params.cycleFinancialContext,
+    executionPlan: params.executionPlan,
+    executionResult: params.executionResult,
+    rejectedOpportunities: params.rejectedOpportunities,
+    legacyCompatibilityOutcomes: params.legacyCompatibilityOutcomes,
+    runtimeOutcomeProjection: {
+      outcomeRecords: params.outcomeRecords,
+      compatibilityExecutionEdgeContexts: params.compatibilityExecutionEdgeContexts,
+      canonicalRuntimeSignals: params.canonicalRuntimeSignals,
+    },
+  };
+}
+
+function buildRuntimeOutcomeProjectionRecords(params: {
+  outcomes: CommandExecutionResult[];
+  executionEdgeContexts: RuntimeJournalProjectionPayload["runtimeOutcomeProjection"]["compatibilityExecutionEdgeContexts"];
+  canonicalRuntimeSignals: CanonicalRuntimeSignals;
+}): RuntimeOutcomeProjectionRecord[] {
+  const contextByExecutionRequestId = new Map(
+    params.executionEdgeContexts.map((context) => [context.executionRequestId, context]),
+  );
+  const runtimeSignalByExecutionRequestId = new Map(
+    params.canonicalRuntimeSignals.outcomeSignals.map((signal) => [signal.executionRequestId, signal]),
+  );
+
+  return params.outcomes.map((outcome) => {
+    const executionEdgeContext = contextByExecutionRequestId.get(outcome.executionRequestId);
+    const runtimeOutcomeSignal = runtimeSignalByExecutionRequestId.get(outcome.executionRequestId);
+
+    if (!executionEdgeContext) {
+      throw new Error(
+        "Runtime journal projection payload assembly integrity violation: missing execution edge context for outcome executionRequestId "
+        + `(${outcome.executionRequestId}).`,
+      );
+    }
+
+    if (!runtimeOutcomeSignal) {
+      throw new Error(
+        "Runtime journal projection payload assembly integrity violation: missing runtime outcome signal for outcome executionRequestId "
+        + `(${outcome.executionRequestId}).`,
+      );
+    }
+
+    return {
+      executionRequestId: outcome.executionRequestId,
+      executionEdgeContext,
+      outcome,
+      runtimeOutcomeSignal,
+    };
+  });
+}
+
+function buildCompatibilityExecutionEdgeContexts(params: {
+  executionEdgeContexts: RuntimeJournalProjectionPayload["runtimeOutcomeProjection"]["compatibilityExecutionEdgeContexts"];
+  legacyCompatibilityOutcomes: CommandExecutionResult[];
+}): RuntimeJournalProjectionPayload["runtimeOutcomeProjection"]["compatibilityExecutionEdgeContexts"] {
+  if (params.legacyCompatibilityOutcomes.length === 0) {
+    return [];
+  }
+
+  const legacyCompatibilityExecutionRequestIds = new Set(
+    params.legacyCompatibilityOutcomes.map((outcome) => outcome.executionRequestId),
+  );
+
+  return params.executionEdgeContexts.filter((context) =>
+    legacyCompatibilityExecutionRequestIds.has(context.executionRequestId));
+}
+
+/** Persists already-projected journal payloads; schema shaping stays outside the store. */
+function persistJournalProjection(
+  journalStore: ExecutionJournalStore | undefined,
+  projection: ReturnType<typeof projectJournal>,
+  decisionExplanationEntries: DecisionExplainedJournalEntry[] = [],
+): void {
+  // Removed the previous publisher logic as it is no longer needed.
+  // The journal entries will be persisted directly.
+
+  if (!journalStore) {
+    return;
+  }
+
+  projection.journalEntries.forEach((entry) => {
+    journalStore.append(entry);
+  });
+
+  decisionExplanationEntries.forEach((entry) => {
+    try {
+      journalStore.appendDecisionExplanation(entry);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[runControlLoopExecutionService] Failed to append decision explanation for ${entry.opportunityId}: ${message}`,
+      );
+    }
+  });
+
+  journalStore.appendHeartbeat(projection.cycleHeartbeat);
+}
+
+function buildOpportunityMetadataIndex(params: {
+  eligibleOpportunities: EligibleOpportunity[];
+  contextByOpportunityId: Map<string, {
+    decisionId?: string;
+    targetDeviceId: string;
+  }>;
+}): Map<string, { decisionId?: string; targetDeviceId?: string }> {
+  const index = new Map<string, { decisionId?: string; targetDeviceId?: string }>();
+
+  params.eligibleOpportunities.forEach((opportunity) => {
+    index.set(opportunity.opportunityId, {
+      decisionId: opportunity.decisionId,
+      targetDeviceId: opportunity.targetDeviceId,
+    });
+  });
+
+  params.contextByOpportunityId.forEach((context, opportunityId) => {
+    if (!index.has(opportunityId)) {
+      index.set(opportunityId, {
+        decisionId: context.decisionId,
+        targetDeviceId: context.targetDeviceId,
+      });
+    }
+  });
+
+  return index;
+}
+
+function buildDecisionExplanationEntries(params: {
+  recordedAt: string;
+  cycleId?: string;
+  executionPosture: RuntimeExecutionPosture;
+  selectedOpportunities: EligibleOpportunity[];
+  rejectedOpportunities: RejectedOpportunity[];
+  cycleFinancialContext?: ExecutionCycleFinancialContext;
+  opportunityMetadataById: Map<string, { decisionId?: string; targetDeviceId?: string }>;
+}): DecisionExplainedJournalEntry[] {
+  const entries: DecisionExplainedJournalEntry[] = [];
+
+  const safePush = (builder: () => DecisionExplainedJournalEntry): void => {
+    try {
+      entries.push(builder());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[runControlLoopExecutionService] Failed to generate decision explanation: ${message}`);
+    }
+  };
+
+  const byDecisionId = new Map(
+    (params.cycleFinancialContext?.decisionsTaken ?? []).map((decision) => [decision.decisionId, decision]),
+  );
+
+  params.selectedOpportunities.forEach((opportunity) => {
+    safePush(() => {
+      const decisionSummary = opportunity.decisionId
+        ? byDecisionId.get(opportunity.decisionId)
+        : undefined;
+
+      return {
+        type: "decision.explained",
+        opportunityId: opportunity.opportunityId,
+        timestamp: params.recordedAt,
+        decision: opportunity.matchedDecisionAction ?? opportunity.canonicalCommand.kind,
+        explanation: generateDecisionExplanation(
+          {
+            opportunityId: opportunity.opportunityId,
+            decisionType: opportunity.matchedDecisionAction ?? opportunity.canonicalCommand.kind,
+            targetDeviceId: opportunity.targetDeviceId,
+            decisionReason:
+              decisionSummary?.decisionReason
+              ?? "Selected as the canonical executable opportunity for this cycle.",
+            planningConfidenceLevel:
+              decisionSummary?.planningConfidenceLevel
+              ?? params.cycleFinancialContext?.planningConfidenceLevel,
+            conservativeAdjustmentApplied:
+              decisionSummary?.conservativeAdjustmentApplied
+              ?? params.cycleFinancialContext?.conservativeAdjustmentApplied,
+            conservativeAdjustmentReason:
+              decisionSummary?.conservativeAdjustmentReason
+              ?? params.cycleFinancialContext?.conservativeAdjustmentReason,
+            economicSignals: {
+              effectiveStoredEnergyValuePencePerKwh: opportunity.economicCandidate?.effectiveStoredEnergyValue,
+              netStoredEnergyValuePencePerKwh: opportunity.economicCandidate?.netStoredEnergyValue,
+              marginalImportAvoidancePencePerKwh: opportunity.economicCandidate?.marginalImportAvoidance,
+              exportValuePencePerKwh: opportunity.economicCandidate?.marginalExportValue,
+            },
+          },
+          {
+            executionPosture: params.executionPosture,
+          },
+        ),
+        cycleId: params.cycleId,
+        decisionId: opportunity.decisionId,
+        targetDeviceId: opportunity.targetDeviceId,
+        schemaVersion: "decision-explained.v1",
+      };
+    });
+  });
+
+  params.rejectedOpportunities.forEach((rejected) => {
+    safePush(() => {
+      const metadata = params.opportunityMetadataById.get(rejected.opportunityId);
+      const decisionSummary = rejected.decisionId
+        ? byDecisionId.get(rejected.decisionId)
+        : metadata?.decisionId
+          ? byDecisionId.get(metadata.decisionId)
+          : undefined;
+
+      return {
+        type: "decision.explained",
+        opportunityId: rejected.opportunityId,
+        timestamp: params.recordedAt,
+        decision: `rejected_${rejected.stage}`,
+        explanation: generateDecisionExplanation(
+          {
+            opportunityId: rejected.opportunityId,
+            decisionType: `rejected_${rejected.stage}`,
+            targetDeviceId: rejected.targetDeviceId ?? metadata?.targetDeviceId,
+            decisionReason: rejected.decisionReason,
+            reasonCodes: rejected.reasonCodes,
+            planningConfidenceLevel:
+              decisionSummary?.planningConfidenceLevel
+              ?? params.cycleFinancialContext?.planningConfidenceLevel,
+            conservativeAdjustmentApplied:
+              decisionSummary?.conservativeAdjustmentApplied
+              ?? params.cycleFinancialContext?.conservativeAdjustmentApplied,
+            conservativeAdjustmentReason:
+              decisionSummary?.conservativeAdjustmentReason
+              ?? params.cycleFinancialContext?.conservativeAdjustmentReason,
+            economicSignals: {
+              effectiveStoredEnergyValuePencePerKwh: decisionSummary?.effectiveStoredEnergyValue,
+              netStoredEnergyValuePencePerKwh: decisionSummary?.netStoredEnergyValue,
+              marginalImportAvoidancePencePerKwh: decisionSummary?.marginalImportAvoidance,
+              exportValuePencePerKwh: decisionSummary?.marginalExportValue,
+            },
+          },
+          {
+            executionPosture: params.executionPosture,
+          },
+        ),
+        cycleId: params.cycleId,
+        decisionId: rejected.decisionId ?? metadata?.decisionId,
+        targetDeviceId: rejected.targetDeviceId ?? metadata?.targetDeviceId,
+        schemaVersion: "decision-explained.v1",
+      };
+    });
+  });
+
+  return entries;
+}
+
+/**
+ * Controller-local helper to keep stage rejection accumulation order explicit.
+ * No business rules belong here; stages own rejection semantics.
+ */
+function appendStageAccumulation(
+  rejectedAccumulator: RejectedOpportunity[],
+  compatibilityAccumulator: CommandExecutionResult[],
+  stage: {
+    rejected: RejectedOpportunity[];
+    compatibilityOutcomes: CommandExecutionResult[];
+  },
+): void {
+  rejectedAccumulator.push(...stage.rejected);
+  compatibilityAccumulator.push(...stage.compatibilityOutcomes);
+}
+
+function buildCycleDecisionSummaries(controlLoopResult: ControlLoopResult): ExecutionCycleDecisionSummary[] {
+  return controlLoopResult.activeDecisions.map((decision) => ({
+    decisionId: decision.decisionId,
+    action: decision.action,
+    targetDeviceIds: [...decision.targetDeviceIds],
+    marginalImportAvoidance: decision.marginalImportAvoidancePencePerKwh,
+    marginalExportValue: decision.marginalExportValuePencePerKwh,
+    grossStoredEnergyValue: decision.grossStoredEnergyValuePencePerKwh,
+    netStoredEnergyValue: decision.netStoredEnergyValuePencePerKwh,
+    batteryDegradationCost: decision.batteryDegradationCostPencePerKwh,
+    effectiveStoredEnergyValue: decision.effectiveStoredEnergyValuePencePerKwh,
+    planningConfidenceLevel: decision.planningConfidenceLevel,
+    conservativeAdjustmentApplied: decision.conservativeAdjustmentApplied,
+    conservativeAdjustmentReason: decision.conservativeAdjustmentReason,
+    decisionReason: decision.reason,
+  }));
+}
+
+function mapRequests(input: ControlLoopInput, result: ControlLoopResult): CommandExecutionRequest[] {
+  if (result.activeOpportunities.length > 0) {
+    return result.activeOpportunities.map((opportunity) =>
+      mapOpportunityToRequest(input, result, opportunity),
+    );
+  }
+
+  return result.commandsToIssue.map((command) => {
+    const canonicalCommand = mapToCanonicalDeviceCommand(command);
+    const matchedDecision = matchDecisionForCommand(canonicalCommand, result.activeDecisions);
+    const identity = buildCommandExecutionIdentity(input.optimizerOutput.planId, canonicalCommand, matchedDecision);
+
+    return {
+      opportunityId: identity.opportunityId,
+      opportunityProvenance: identity.opportunityId
+        ? {
+            kind: "native_canonical",
+            canonicalizedFromLegacy: false,
+          }
+        : undefined,
+      executionRequestId: identity.executionRequestId,
+      requestId: identity.executionRequestId,
+      idempotencyKey: identity.idempotencyKey,
+      decisionId: identity.decisionId,
+      targetDeviceId: identity.targetDeviceId,
+      planId: input.optimizerOutput.planId,
+      requestedAt: input.now,
+      commandId: command.commandId,
+      canonicalCommand,
+    };
+  });
+}
+
+function mapOpportunityToRequest(
+  input: ControlLoopInput,
+  result: ControlLoopResult,
+  opportunity: OptimizerOpportunity,
+): CommandExecutionRequest {
+  const canonicalCommand = mapToCanonicalDeviceCommand(opportunity.command);
+  const matchedDecision = opportunity.decisionId
+    ? result.activeDecisions.find((decision) => decision.decisionId === opportunity.decisionId)
+    : matchDecisionForCommand(canonicalCommand, result.activeDecisions);
+  const identity = buildCommandExecutionIdentity(
+    input.optimizerOutput.planId,
+    canonicalCommand,
+    matchedDecision,
+    opportunity.opportunityId,
+  );
+
+  return {
+    opportunityId: opportunity.opportunityId,
+    opportunityProvenance: {
+      kind: "native_canonical",
+      canonicalizedFromLegacy: false,
+    },
+    executionRequestId: identity.executionRequestId,
+    requestId: identity.executionRequestId,
+    idempotencyKey: identity.idempotencyKey,
+    decisionId: identity.decisionId,
+    targetDeviceId: identity.targetDeviceId,
+    planId: input.optimizerOutput.planId,
+    requestedAt: input.now,
+    commandId: opportunity.command.commandId,
+    canonicalCommand,
+  };
+}
+
+function enrichOutcomesForCoherenceAssessment(
+  outcomes: CommandExecutionResult[],
+  input: ControlLoopInput,
+): EvidenceAnnotatedExecutionResult[] {
+  // Precompute freshness lookup map for O(1) enrichment (canonical evidence only)
+  const freshnessMap = new Map(
+    (input.observedStateFreshness?.devices ?? []).map((device) => [
+      device.deviceId,
+      device.status,
+    ]),
+  );
+
+  return outcomes.map((outcome) => ({
+    ...outcome,
+    observedStateFreshness: freshnessMap.get(outcome.targetDeviceId),
+  }));
+}
+
+/**
+ * Derives a canonical next-cycle execution caution signal from cycle-level evidence.
+ *
+ * Pure and deterministic: maps the already-computed cycle-level execution uncertainty
+ * summary to an advisory signal for the next control cycle. Informational only — never
+ * drives canonical policy logic or execution behavior.
+ *
+ * Mapping rules:
+ * - hasUncertainExecutionEvidence === true => "caution"
+ * - hasUncertainExecutionEvidence === false => "normal"
+ */
+export function deriveNextCycleExecutionCaution(summary: {
+  hasUncertainExecutionEvidence: boolean;
+}): {
+  nextCycleExecutionCaution: "normal" | "caution";
+} {
+  return {
+    nextCycleExecutionCaution: summary.hasUncertainExecutionEvidence ? "caution" : "normal",
+  };
+}
+
+/**
+ * Derives a canonical cycle-level summary of household economic intent.
+ *
+ * Pure and deterministic: summarizes current-cycle objective orientation from
+ * already-canonical decision economics. Informational only — never changes
+ * arbitration, planning, or execution behavior.
+ */
+export function deriveHouseholdObjectiveSummary(
+  decisions: ExecutionCycleDecisionSummary[],
+): {
+  objectiveMode: "savings" | "earnings" | "balanced";
+  hasExportIntent: boolean;
+  hasImportAvoidanceIntent: boolean;
+} {
+  const hasExportIntent = decisions.some((decision) => (decision.marginalExportValue ?? 0) > 0);
+  const hasImportAvoidanceIntent = decisions.some((decision) =>
+    (decision.marginalImportAvoidance ?? 0) > 0
+    || (decision.effectiveStoredEnergyValue ?? 0) > 0
+    || (decision.netStoredEnergyValue ?? 0) > 0
+    || (decision.grossStoredEnergyValue ?? 0) > 0,
+  );
+
+  const objectiveMode = hasExportIntent && hasImportAvoidanceIntent
+    ? "balanced"
+    : hasExportIntent
+      ? "earnings"
+      : "savings";
+
+  return {
+    objectiveMode,
+    hasExportIntent,
+    hasImportAvoidanceIntent,
+  };
+}
+
+/**
+ * Derives an informational confidence signal for the current household objective summary.
+ *
+ * Pure and deterministic: classifies whether objective characterization is empty,
+ * clear, or mixed based on already-computed canonical objective summary only.
+ */
+export function deriveHouseholdObjectiveConfidence(summary: {
+  objectiveMode: "savings" | "earnings" | "balanced";
+  hasExportIntent: boolean;
+  hasImportAvoidanceIntent: boolean;
+}): {
+  householdObjectiveConfidence: "clear" | "mixed" | "empty";
+} {
+  const { objectiveMode, hasExportIntent, hasImportAvoidanceIntent } = summary;
+
+  if (!hasExportIntent && !hasImportAvoidanceIntent) {
+    return { householdObjectiveConfidence: "empty" };
+  }
+
+  if (objectiveMode === "balanced" || (hasExportIntent && hasImportAvoidanceIntent)) {
+    return { householdObjectiveConfidence: "mixed" };
+  }
+
+  if (
+    (objectiveMode === "savings" && !hasExportIntent && hasImportAvoidanceIntent)
+    || (objectiveMode === "earnings" && hasExportIntent && !hasImportAvoidanceIntent)
+  ) {
+    return { householdObjectiveConfidence: "clear" };
+  }
+
+  return { householdObjectiveConfidence: "mixed" };
+}
+
+/**
+ * Thin pipeline controller between canonical planning/control and adapter execution.
+ *
+ * This function orchestrates stage invocation, accumulation, persistence, and
+ * shadow updates. It must not introduce economic reasoning or stage-local policy.
+ * See docs/architecture/execution-architecture.md for the wider execution boundary.
+ */
+export async function runControlLoopExecutionService(
+  input: ControlLoopInput,
+  executor: DeviceCommandExecutor,
+  capabilitiesProvider?: DeviceCapabilitiesProvider,
+  shadowStore?: DeviceShadowStore,
+  journalStore?: ExecutionJournalStore,
+  cycleFinancialContext?: Omit<ExecutionCycleFinancialContext, "decisionsTaken">,
+  runtimeGuardrailContext?: RuntimeExecutionGuardrailContext,
+  runtimeExecutionMode: RuntimeExecutionMode = "standard",
+  cycleHeartbeatMeta?: { cycleId?: string; replanReason?: string },
+): Promise<ControlLoopExecutionServiceResult> {
+  const controlLoopResult = runControlLoop(input);
+  const cycleDecisionSummaries = buildCycleDecisionSummaries(controlLoopResult);
+  const householdObjectiveSummary = deriveHouseholdObjectiveSummary(cycleDecisionSummaries);
+  const householdObjectiveConfidence = deriveHouseholdObjectiveConfidence(householdObjectiveSummary);
+  const missingRuntimeContextInStrictMode =
+    runtimeExecutionMode === "continuous_live_strict" && !runtimeGuardrailContext;
+
+  const postureClassification = missingRuntimeContextInStrictMode
+    ? {
+      posture: "hold_only" as const,
+      reasonCodes: [
+        "RUNTIME_CONSERVATIVE_MODE_ACTIVE" as const,
+        "RUNTIME_CONTEXT_MISSING" as const,
+      ],
+      warning:
+        "Runtime guardrail context missing in continuous live mode. Live dispatch suppressed.",
+    }
+    : classifyRuntimeExecutionPosture(runtimeGuardrailContext);
+
+  const executionPosture = postureClassification.posture;
+  const enrichedCycleFinancialContext = cycleFinancialContext
+    ? {
+      ...cycleFinancialContext,
+      decisionsTaken: cycleDecisionSummaries,
+      runtimeExecutionPosture: executionPosture,
+      runtimeExecutionReasonCodes: postureClassification.reasonCodes,
+      runtimeExecutionWarning: postureClassification.warning,
+    }
+    : undefined;
+
+  const requests = adaptLegacyExecutionRequests(mapRequests(input, controlLoopResult));
+  const executionEdgeContexts = buildExecutionEdgeContextsFromRequests(requests);
+  const contextByExecutionRequestId = new Map(
+    executionEdgeContexts.map((context) => [context.executionRequestId, context]),
+  );
+  const contextByOpportunityId = new Map(
+    executionEdgeContexts.map((context) => [context.opportunityId, context]),
+  );
+
+  if (requests.length === 0) {
+    const canonicalRuntimeSignals = buildCanonicalRuntimeSignals({
+      outcomes: [],
+      executionEvidenceSummary: summarizeExecutionEvidenceConfidence([]),
+      householdObjectiveSummary,
+      householdObjectiveConfidence: householdObjectiveConfidence.householdObjectiveConfidence,
+    });
+    const runtimeJournalProjectionPayload = buildRuntimeJournalProjectionPayload({
+      recordedAt: input.now,
+      executionPosture,
+      runtimeGuardrailContext,
+      failClosedTriggered: missingRuntimeContextInStrictMode,
+      cycleHeartbeatMeta,
+      cycleFinancialContext: enrichedCycleFinancialContext,
+      rejectedOpportunities: [],
+      legacyCompatibilityOutcomes: [],
+      outcomeRecords: [],
+      compatibilityExecutionEdgeContexts: [],
+      canonicalRuntimeSignals,
+    });
+    const journalProjection = projectJournal(runtimeJournalProjectionPayload);
+    persistJournalProjection(journalStore, journalProjection, []);
+
+    return {
+      controlLoopResult,
+      executionResults: [],
+      executionPosture,
+      executionEvidenceSummary: canonicalRuntimeSignals.executionEvidenceSummary,
+      householdObjectiveSummary: canonicalRuntimeSignals.householdObjectiveSummary,
+      householdObjectiveConfidence: canonicalRuntimeSignals.householdObjectiveConfidence,
+      nextCycleExecutionCaution: canonicalRuntimeSignals.nextCycleExecutionCaution,
+    };
+  }
+
+  const eligibilityEvaluation = evaluateOpportunityEligibility({
+    requests,
+    input,
+    controlLoopResult,
+    capabilitiesProvider,
+    shadowStore,
+    runtimeGuardrailContext,
+    executionPosture,
+    postureClassification,
+    missingRuntimeContextInStrictMode,
+    cycleFinancialContext: enrichedCycleFinancialContext,
+  });
+  const eligibleOpportunities = eligibilityEvaluation.eligible;
+  // Ordering invariant for accumulation: eligibility -> device -> household -> planning.
+  // This ordering is intentionally preserved for downstream compatibility/journal pathways.
+  const rejectedOpportunities: RejectedOpportunity[] = [...eligibilityEvaluation.rejected];
+  const policyDenials: CommandExecutionResult[] = [...eligibilityEvaluation.compatibilityOutcomes];
+
+  const deviceEconomicArbitration = enrichedCycleFinancialContext
+    ? arbitrateDeviceOpportunities(eligibleOpportunities, enrichedCycleFinancialContext)
+    : {
+        prerejections: new Map<string, EconomicPrerejection>(),
+        selectedTraces: new Map<string, ExecutionEconomicArbitrationTrace>(),
+      };
+
+  const postDeviceEligibleOpportunities = eligibleOpportunities.filter(
+    (opportunity) => !deviceEconomicArbitration.prerejections.has(opportunity.opportunityId),
+  );
+
+  const householdEconomicArbitration = enrichedCycleFinancialContext
+    ? selectHouseholdDecision(postDeviceEligibleOpportunities, enrichedCycleFinancialContext)
+    : {
+        prerejections: new Map<string, EconomicPrerejection>(),
+        selectedTraces: new Map<string, ExecutionEconomicArbitrationTrace>(),
+      };
+
+  const deviceArbitrationMapping = mapDeviceArbitrationPrerejections(
+    deviceEconomicArbitration.prerejections,
+    contextByOpportunityId,
+  );
+  appendStageAccumulation(rejectedOpportunities, policyDenials, deviceArbitrationMapping);
+
+  const householdDecisionMapping = mapHouseholdDecisionPrerejections(
+    householdEconomicArbitration.prerejections,
+    contextByOpportunityId,
+  );
+  appendStageAccumulation(rejectedOpportunities, policyDenials, householdDecisionMapping);
+
+  const selectedEconomicTraces = new Map<string, ExecutionEconomicArbitrationTrace>([
+    ...deviceEconomicArbitration.selectedTraces,
+    ...householdEconomicArbitration.selectedTraces,
+  ]);
+
+  const finalEligibleOpportunities = postDeviceEligibleOpportunities.filter(
+    (opportunity) => !householdEconomicArbitration.prerejections.has(opportunity.opportunityId),
+  );
+
+  const executionPlanStage = buildExecutionPlan({
+    opportunities: finalEligibleOpportunities,
+    input,
+    controlLoopResult,
+  });
+  appendStageAccumulation(rejectedOpportunities, policyDenials, executionPlanStage);
+
+  const executedPlan = await executePlan({
+    plan: executionPlanStage.plan,
+    dispatchableOpportunities: executionPlanStage.dispatchableOpportunities,
+    executor,
+    preExecutionOutcomes: policyDenials,
+    selectedEconomicTraces,
+    executionPosture,
+    rejectedOpportunities,
+  });
+
+  const coherenceAssessedOutcomes = assessExecutionEvidenceCoherence(
+    enrichOutcomesForCoherenceAssessment(executedPlan.outcomes, input),
+  );
+
+  const canonicalRuntimeSignals = buildCanonicalRuntimeSignals({
+    outcomes: coherenceAssessedOutcomes,
+    executionEvidenceSummary: summarizeExecutionEvidenceConfidence(coherenceAssessedOutcomes),
+    householdObjectiveSummary,
+    householdObjectiveConfidence: householdObjectiveConfidence.householdObjectiveConfidence,
+  });
+  const runtimeJournalProjectionPayload = buildRuntimeJournalProjectionPayload({
+    recordedAt: input.now,
+    executionPosture,
+    runtimeGuardrailContext,
+    failClosedTriggered: missingRuntimeContextInStrictMode,
+    cycleHeartbeatMeta,
+    cycleFinancialContext: enrichedCycleFinancialContext,
+    executionPlan: executionPlanStage.plan,
+    executionResult: executedPlan.execution,
+    rejectedOpportunities: executedPlan.execution.rejectedOpportunities,
+    legacyCompatibilityOutcomes: policyDenials,
+    outcomeRecords: buildRuntimeOutcomeProjectionRecords({
+      outcomes: coherenceAssessedOutcomes,
+      executionEdgeContexts,
+      canonicalRuntimeSignals,
+    }),
+    compatibilityExecutionEdgeContexts: buildCompatibilityExecutionEdgeContexts({
+      executionEdgeContexts,
+      legacyCompatibilityOutcomes: policyDenials,
+    }),
+    canonicalRuntimeSignals,
+  });
+  const journalProjection = projectJournal(runtimeJournalProjectionPayload);
+  const opportunityMetadataById = buildOpportunityMetadataIndex({
+    eligibleOpportunities,
+    contextByOpportunityId,
+  });
+  const canonicalRejectedOpportunities = executedPlan.execution.rejectedOpportunities;
+  const decisionExplanationEntries = buildDecisionExplanationEntries({
+    recordedAt: input.now,
+    cycleId: cycleHeartbeatMeta?.cycleId,
+    executionPosture,
+    selectedOpportunities: executionPlanStage.dispatchableOpportunities,
+    rejectedOpportunities: canonicalRejectedOpportunities,
+    cycleFinancialContext: enrichedCycleFinancialContext,
+    opportunityMetadataById,
+  });
+  persistJournalProjection(journalStore, journalProjection, decisionExplanationEntries);
+
+  if (shadowStore) {
+    const contextByExecutionId = new Map(
+      executedPlan.executionEdgeContexts.map((context) => [context.executionRequestId, context]),
+    );
+
+    executedPlan.adapterResults.forEach((result) => {
+      const context = contextByExecutionId.get(result.executionRequestId)
+        ?? contextByExecutionRequestId.get(result.executionRequestId);
+      if (!context) {
+        return;
+      }
+
+      const outcomeProjection = projectExecutionOutcome(result, context.canonicalCommand);
+      if (!outcomeProjection.shouldUpdateShadow) {
+        return;
+      }
+
+      const existing = shadowStore.getDeviceState(context.targetDeviceId);
+      const projected = projectExecutionToDeviceShadow(
+        existing,
+        context.canonicalCommand,
+        result,
+        input.now,
+      );
+
+      if (projected) {
+        shadowStore.setDeviceState(context.targetDeviceId, projected);
+      }
+    });
+  }
+
+  return {
+    controlLoopResult,
+    executionResults: coherenceAssessedOutcomes,
+    executionPosture,
+    executionEvidenceSummary: canonicalRuntimeSignals.executionEvidenceSummary,
+    householdObjectiveSummary: canonicalRuntimeSignals.householdObjectiveSummary,
+    householdObjectiveConfidence: canonicalRuntimeSignals.householdObjectiveConfidence,
+    nextCycleExecutionCaution: canonicalRuntimeSignals.nextCycleExecutionCaution,
+  };
+}
