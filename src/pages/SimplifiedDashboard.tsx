@@ -765,6 +765,7 @@ export default function SimplifiedDashboard() {
     latestCycleHeartbeat,
     recentCycleHeartbeats,
     recentExecutionOutcomes,
+    recentDecisionExplanations,
   } = runtimeTruthSnapshot;
 
   useEffect(() => {
@@ -799,8 +800,23 @@ export default function SimplifiedDashboard() {
     <div style={{ background: "#030712", minHeight: "100vh", color: "#F9FAFB", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto", maxWidth: 480, margin: "0 auto", paddingBottom: 80 }}>
         {/* Canonical runtime truth is hydrated from the durable journal bridge into a
           browser-side cache. UI remains a read-only consumer of persisted runtime output. */}
-      {tab === "home"    && <HomeTab connectedDevices={connectedDevices} now={now} latestCycleHeartbeat={latestCycleHeartbeat} />}
-      {tab === "plan"    && <PlanTab connectedDevices={connectedDevices} now={now} />}
+      {tab === "home"    && (
+        <HomeTab
+          connectedDevices={connectedDevices}
+          now={now}
+          latestCycleHeartbeat={latestCycleHeartbeat}
+          recentDecisionExplanations={recentDecisionExplanations}
+        />
+      )}
+      {tab === "plan"    && (
+        <PlanTab
+          connectedDevices={connectedDevices}
+          now={now}
+          latestCycleHeartbeat={latestCycleHeartbeat}
+          recentDecisionExplanations={recentDecisionExplanations}
+          recentExecutionOutcomes={recentExecutionOutcomes}
+        />
+      )}
       {tab === "history" && (
         <HistoryTab
           connectedDevices={connectedDevices}

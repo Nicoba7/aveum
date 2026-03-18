@@ -26,7 +26,7 @@ import { TIMELINE_EMPHASIS_TOKENS, timelineDotGlow } from "./timelineEmphasisTok
 import DecisionExplanationSheet from "./DecisionExplanationSheet";
 import { buildDecisionExplanation } from "../lib/decisionExplanation";
 import { buildHomeRuntimeReadModel } from "../features/home/homeRuntimeReadModel";
-import type { CycleHeartbeatEntry } from "../journal/executionJournal";
+import type { CycleHeartbeatEntry, DecisionExplainedJournalEntry } from "../journal/executionJournal";
 
 const ENABLE_HOME_SIMULATION = import.meta.env.DEV;
 
@@ -148,59 +148,61 @@ function shortenReason(reason?: string): string {
   return reason;
 }
 
-function conciseHeroHeadline(): string {
-  return "Optimising quietly";
-}
+function hasBalancedParentheses(value: string): boolean {
+  let depth = 0;
 
-function buildHomeReassuranceNote({
-  hasEV,
-  hasBattery,
-  hasSolar,
-  solarForecastKwh,
-  batteryPct,
-  slotIndex,
-}: {
-  hasEV: boolean;
-  hasBattery: boolean;
-  hasSolar: boolean;
-  solarForecastKwh: number;
-  batteryPct: number;
-  slotIndex: number;
-}) {
-  const options: string[] = [];
-
-  if (hasEV) options.push("EV ready by target time remains on track.");
-  if (hasBattery) {
-    options.push(batteryPct >= 25
-      ? "Battery reserve is protected for higher-cost periods."
-      : "Battery reserve is being rebuilt to protect evening demand.");
-  }
-  if (hasSolar && solarForecastKwh >= 10) {
-    options.push("Solar is expected to cover most daytime demand.");
+  for (const char of value) {
+    if (char === "(") depth += 1;
+    if (char === ")") depth -= 1;
+    if (depth < 0) return false;
   }
 
-  if (!options.length) return "Gridly is continuously adapting to keep your home stable and efficient.";
-  return options[slotIndex % options.length];
+  return depth === 0;
 }
 
-function buildFlowInterpretation({
-  hasSolar,
-  hasBattery,
-  hasEV,
-  isCharging,
-  isExporting,
-}: {
-  hasSolar: boolean;
-  hasBattery: boolean;
-  hasEV: boolean;
-  isCharging: boolean;
-  isExporting: boolean;
-}) {
-  if (isExporting && hasBattery) return "Your home is powered while Gridly exports at stronger rates.";
-  if (hasSolar && hasBattery && !isCharging) return "Most demand is being covered by solar and battery right now.";
-  if (hasEV && isCharging) return "Gridly is charging your EV now while keeping home comfort protected.";
-  if (hasBattery && isCharging) return "Gridly is topping up storage now to protect later higher-cost periods.";
-  return "Gridly is continuously routing energy to keep your home efficient and stable.";
+function isReadableSummaryHeadline(summary: string): boolean {
+  const trimmed = summary.trim();
+  if (!trimmed) return false;
+  if (trimmed.length > 72) return false;
+  if (/\.\.\.|…/.test(trimmed)) return false;
+  if (!hasBalancedParentheses(trimmed)) return false;
+  if (/[0-9]/.test(trimmed)) return false;
+  if (/\b(p\/kwh|kwh|£|%|marginal|effective|stored-energy|opportunity)\b/i.test(trimmed)) return false;
+  if (/^decision\b/i.test(trimmed)) return false;
+  return true;
+}
+
+function mapActionHeadline(params: {
+  decisionType?: string;
+  canonicalAction?: string;
+}): string | undefined {
+  const decisionType = params.decisionType?.toLowerCase().trim() ?? "";
+  const canonicalAction = params.canonicalAction?.toLowerCase().trim() ?? "";
+
+  if (decisionType.includes("charge") || canonicalAction === "charge") return "Charging battery";
+  if (decisionType.includes("discharge") || canonicalAction === "discharge") return "Powering home from battery";
+  if (decisionType.includes("solar") || decisionType.includes("export") || canonicalAction === "export") {
+    return "Running home on solar";
+  }
+  if (canonicalAction === "import") return "Importing from grid";
+  if (decisionType.startsWith("rejected_") || canonicalAction === "hold") return "System is idle";
+
+  return undefined;
+}
+
+function chooseHeadlineText(params: {
+  summary: string;
+  decisionType?: string;
+  canonicalAction?: string;
+}): string {
+  if (isReadableSummaryHeadline(params.summary)) {
+    return params.summary.trim();
+  }
+
+  return mapActionHeadline({
+    decisionType: params.decisionType,
+    canonicalAction: params.canonicalAction,
+  }) ?? "System is idle";
 }
 
 type TimelineItem = {
@@ -501,7 +503,7 @@ function EnergyFlowSVG({
   const homeToGrid = `M ${HOME.x - homeRadius - 2},${HOME.y} L ${GRID.x + nodeRadius + 2},${GRID.y}`;
 
   return (
-    <svg viewBox="0 0 320 220" style={{ width: "100%", maxHeight: 232 }}>
+    <svg viewBox="0 0 320 220" style={{ width: "100%", maxHeight: 186 }}>
       {hasSolar && <FlowConnector x1={SOLAR.x} y1={SOLAR.y + nodeRadius} x2={HOME.x} y2={HOME.y - homeRadius} active={solarOn} color={ENERGY_COLORS.solar} intensity="home" />}
       {hasBattery && <FlowConnector x1={HOME.x + homeRadius} y1={HOME.y} x2={BATT.x - nodeRadius} y2={BATT.y} active={batteryChargeOn || batteryDischargeOn} color={ENERGY_COLORS.battery} intensity="home" />}
       {hasEV && <FlowConnector x1={HOME.x} y1={HOME.y + homeRadius} x2={EV.x} y2={EV.y - nodeRadius} active={evOn} color={ENERGY_COLORS.ev} intensity="home" />}
@@ -605,9 +607,15 @@ export interface HomeTabProps {
   connectedDevices: DeviceConfig[];
   now: Date;
   latestCycleHeartbeat?: CycleHeartbeatEntry;
+  recentDecisionExplanations?: DecisionExplainedJournalEntry[];
 }
 
-export default function HomeTab({ connectedDevices, now, latestCycleHeartbeat }: HomeTabProps) {
+export default function HomeTab({
+  connectedDevices,
+  now,
+  latestCycleHeartbeat,
+  recentDecisionExplanations = [],
+}: HomeTabProps) {
   const hasBattery = connectedDevices.some((device) => device.id === "battery");
   const hasEV = connectedDevices.some((device) => device.id === "ev");
   const hasSolar = connectedDevices.some((device) => device.id === "solar");
@@ -689,29 +697,20 @@ export default function HomeTab({ connectedDevices, now, latestCycleHeartbeat }:
   const isExporting = homeOptimizerView.currentAction === "export";
 
   const heroColor = isCharging ? "#22C55E" : isExporting ? "#F59E0B" : "#6B7280";
-  const heroLabel = conciseHeroHeadline();
-  // Render canonical runtime decision rationale directly.
-  // UI must not reinterpret or rewrite economic/accounting meaning.
-  const heroReason = homeRuntimeReadModel.currentDecisionReason;
-  const hasDeviceAlerts = connectedDevices.some((device) => {
-    const health = deviceHealth[device.id];
-    return health && !health.ok;
+  const latestDecisionExplanationEntry = recentDecisionExplanations.find(
+    (entry) => Array.isArray(entry.explanation?.drivers) && entry.explanation.drivers.length >= 2,
+  ) ?? recentDecisionExplanations.find(
+    (entry) => Array.isArray(entry.explanation?.drivers) && entry.explanation.drivers.length > 0,
+  );
+  const latestDecisionExplanation = latestDecisionExplanationEntry?.explanation;
+  const explanationSummaryRaw = latestDecisionExplanation?.summary ?? homeRuntimeReadModel.currentDecisionReason;
+  const explanationSummary = chooseHeadlineText({
+    summary: explanationSummaryRaw,
+    decisionType: latestDecisionExplanationEntry?.decision,
+    canonicalAction: homeOptimizerView.currentAction,
   });
-  const homeReassuranceNote = buildHomeReassuranceNote({
-    hasEV,
-    hasBattery,
-    hasSolar,
-    solarForecastKwh: SANDBOX?.solarForecast?.kwh ?? 0,
-    batteryPct: s.batteryPct,
-    slotIndex,
-  });
-  const flowInterpretation = buildFlowInterpretation({
-    hasSolar,
-    hasBattery,
-    hasEV,
-    isCharging,
-    isExporting,
-  });
+  const explanationDrivers = latestDecisionExplanation?.drivers ?? [];
+  const displayedExplanationDrivers = explanationDrivers.slice(0, 3);
   const homeValueSavings = homeOptimizerView.value.savingsToday > 0
     ? homeOptimizerView.value.savingsToday
     : SANDBOX.savedToday;
@@ -721,62 +720,52 @@ export default function HomeTab({ connectedDevices, now, latestCycleHeartbeat }:
   // Pass-through of runtime planner truth. Components must not derive substitute
   // meanings for confidence/caution signals outside canonical runtime outputs.
   // Presentation-only label. Canonical meaning comes from runtime read model truth.
-  const confidenceBadge = homeRuntimeReadModel.conservativeAdjustmentApplied
-    ? "Running conservatively"
+  const confidenceBadge = latestDecisionExplanation?.confidence
+    ? `Confidence: ${latestDecisionExplanation.confidence}`
+    : homeRuntimeReadModel.conservativeAdjustmentApplied
+      ? "Running conservatively"
     : homeRuntimeReadModel.planningConfidenceLabel
       ? `Confidence: ${homeRuntimeReadModel.planningConfidenceLabel}`
       : `Confidence: ${homeOptimizerView.trust.confidenceLabel}`;
-  const confidenceCopy = homeRuntimeReadModel.conservativeAdjustmentReason
-    ? homeRuntimeReadModel.conservativeAdjustmentReason
-    : `${homeOptimizerView.trust.explanation} ${homeOptimizerView.nextStepLabel}`;
   // Presentation-only label. Canonical caution signal comes from runtime heartbeat.
   const cycleCautionBadge = homeRuntimeReadModel.nextCycleExecutionCaution
     ? `Caution: ${homeRuntimeReadModel.nextCycleExecutionCaution}`
     : undefined;
 
   return (
-    <div style={{ background: "#060A12", minHeight: "100vh", paddingBottom: 40 }}>
-      <div style={{ margin: "18px 16px 0", background: "#0A111D", borderRadius: 20, border: "1px solid #182235", overflow: "hidden", boxShadow: "0 18px 42px rgba(1, 7, 20, 0.35)" }}>
+    <div style={{ background: "#060A12", minHeight: "100vh", paddingBottom: 30 }}>
+      <div style={{ margin: "14px 14px 0", background: "#0A111D", borderRadius: 20, border: "1px solid #182235", overflow: "hidden", boxShadow: "0 16px 30px rgba(1, 7, 20, 0.3)" }}>
         <div style={{ height: 2, background: `linear-gradient(90deg, ${heroColor}, ${heroColor}30)` }} />
-        <div style={{ padding: "20px 20px 20px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <div style={{ padding: "18px 18px 16px", minHeight: 248 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <div style={{ width: 6, height: 6, borderRadius: "50%", background: heroColor, boxShadow: `0 0 8px ${heroColor}, 0 0 16px ${heroColor}50` }} />
-            <span style={{ fontSize: 11, color: "#4B5563", fontWeight: 600, letterSpacing: 0.8 }}>QUIETLY IN CONTROL</span>
-            <span style={{ fontSize: 10, color: "#7B8EA8", marginLeft: "auto", border: "1px solid #1D2B40", borderRadius: 999, padding: "2px 8px" }}>
+            <span style={{ fontSize: 11, color: "#4B5563", fontWeight: 600, letterSpacing: 0.8 }}>CURRENT DECISION</span>
+            <span style={{ fontSize: 9, color: "#6E819B", marginLeft: "auto", border: "1px solid #1B293D", borderRadius: 999, padding: "2px 8px" }}>
               {confidenceBadge}
             </span>
             {cycleCautionBadge && (
-              <span style={{ fontSize: 10, color: "#7B8EA8", border: "1px solid #1D2B40", borderRadius: 999, padding: "2px 8px" }}>
+              <span style={{ fontSize: 9, color: "#6E819B", border: "1px solid #1B293D", borderRadius: 999, padding: "2px 8px" }}>
                 {cycleCautionBadge}
               </span>
             )}
           </div>
 
-          <div style={{ fontSize: 34, fontWeight: 850, color: "#F3F7FF", letterSpacing: -1.2, lineHeight: 1.05, marginBottom: 8 }}>{heroLabel}</div>
-
-          <div style={{ fontSize: 12, color: "#72829A", lineHeight: 1.4, marginBottom: 14 }}>{heroReason}</div>
-
-          <div style={{ display: "flex", gap: 18, borderTop: "1px solid #162235", paddingTop: 12 }}>
-            <div>
-              <div style={{ fontSize: 10, color: "#506077", fontWeight: 600, letterSpacing: 0.6, marginBottom: 3 }}>SAVED BY GRIDLY TODAY</div>
-              <div style={{ fontSize: 19, fontWeight: 800, color: "#22C55E", letterSpacing: -0.5 }}>+£{homeValueSavings}</div>
-            </div>
-            {homeValueEarnings > 0 && (
-              <div>
-                <div style={{ fontSize: 10, color: "#506077", fontWeight: 600, letterSpacing: 0.6, marginBottom: 3 }}>EARNED BY GRIDLY TODAY</div>
-                <div style={{ fontSize: 19, fontWeight: 800, color: "#F59E0B", letterSpacing: -0.5 }}>+£{homeValueEarnings}</div>
-              </div>
-            )}
-            <div style={{ marginLeft: "auto" }}>
-              <div style={{ fontSize: 10, color: "#506077", fontWeight: 600, letterSpacing: 0.6, marginBottom: 3 }}>LIVE RATE</div>
-              <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: -0.5, color: currentPence < 15 ? "#22C55E" : currentPence < 25 ? "#F59E0B" : "#EF4444" }}>{currentPence.toFixed(1)}p</div>
-            </div>
+          <div style={{ fontSize: 26, fontWeight: 810, color: "#F3F7FF", letterSpacing: -0.55, lineHeight: 1.15, marginBottom: 10 }}>
+            {explanationSummary}
           </div>
+
+          {displayedExplanationDrivers.length > 0 && (
+            <ul style={{ margin: 0, paddingLeft: 18, color: "#A8BAD2", fontSize: 12, lineHeight: 1.45 }}>
+              {displayedExplanationDrivers.map((driver, index) => (
+                <li key={`${driver}-${index}`} style={{ marginBottom: index < displayedExplanationDrivers.length - 1 ? 6 : 0 }}>{driver}</li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
 
-      <div style={{ margin: "10px 16px 0", background: "#09101A", borderRadius: 22, border: "1px solid #172236", padding: "18px 20px 10px", boxShadow: "0 26px 48px rgba(1, 7, 20, 0.38)" }}>
-        <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.2, marginBottom: 2 }}>ENERGY FLOW</div>
+      <div style={{ margin: "8px 14px 0", background: "#09101A", borderRadius: 20, border: "1px solid #172236", padding: "10px 14px 4px", boxShadow: "0 6px 12px rgba(1, 7, 20, 0.16)" }}>
+        <div style={{ fontSize: 9.5, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.1, marginBottom: 1, opacity: 0.84 }}>ENERGY FLOW</div>
         <EnergyFlowSVG
           hasSolar={hasSolar}
           hasBattery={hasBattery}
@@ -789,12 +778,32 @@ export default function HomeTab({ connectedDevices, now, latestCycleHeartbeat }:
           isCharging={isCharging}
           isExporting={isExporting}
         />
-        <div style={{ fontSize: 11, color: "#71839C", lineHeight: 1.45, paddingBottom: 8 }}>{flowInterpretation}</div>
+      </div>
+
+      <div style={{ margin: "8px 14px 0", background: "#0A1220", borderRadius: 16, border: "1px solid #18263D", padding: "8px 12px" }}>
+        <div style={{ display: "flex", gap: 16, alignItems: "baseline" }}>
+          <div>
+            <div style={{ fontSize: 10, color: "#6F819B", fontWeight: 600, letterSpacing: 0.6, marginBottom: 2 }}>SAVED TODAY</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#22C55E" }}>+£{homeValueSavings}</div>
+          </div>
+          {homeValueEarnings > 0 && (
+            <div>
+              <div style={{ fontSize: 10, color: "#6F819B", fontWeight: 600, letterSpacing: 0.6, marginBottom: 2 }}>EARNED TODAY</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#F59E0B" }}>+£{homeValueEarnings}</div>
+            </div>
+          )}
+          <div style={{ marginLeft: "auto", textAlign: "right" }}>
+            <div style={{ fontSize: 10, color: "#6F819B", fontWeight: 600, letterSpacing: 0.6, marginBottom: 2 }}>LIVE RATE</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: currentPence < 15 ? "#22C55E" : currentPence < 25 ? "#F59E0B" : "#EF4444" }}>
+              {currentPence.toFixed(1)}p
+            </div>
+          </div>
+        </div>
       </div>
 
       {timeline.length > 0 && (
-        <div style={{ margin: "14px 16px 0", background: "#0B1120", borderRadius: 20, border: "1px solid #152238", padding: "14px 20px" }}>
-          <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.05, marginBottom: 12 }}>NEXT</div>
+        <div style={{ margin: "10px 14px 0", background: "#0B1120", borderRadius: 18, border: "1px solid #152238", padding: "10px 14px", boxShadow: "none" }}>
+          <div style={{ fontSize: 9.5, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.0, marginBottom: 8, opacity: 0.8 }}>NEXT</div>
           {(() => {
             const emphasisByIndex = deriveHomeTimelineEmphasis(timeline, slotIndex);
             return timeline.map((item, index) => {
@@ -863,11 +872,6 @@ export default function HomeTab({ connectedDevices, now, latestCycleHeartbeat }:
         </div>
       )}
 
-      <div style={{ margin: "12px 16px 0", background: "#0A1220", borderRadius: 16, border: "1px solid #18263D", padding: "11px 14px" }}>
-        <div style={{ fontSize: 10, color: "#7B8EA8", fontWeight: 700, letterSpacing: 0.75, marginBottom: 4 }}>CONFIDENCE</div>
-        <div style={{ fontSize: 12, color: "#A5B4C7", lineHeight: 1.45 }}>{hasDeviceAlerts ? homeReassuranceNote : confidenceCopy}</div>
-      </div>
-
       <SystemHealthCard connectedDevices={connectedDevices} deviceHealth={deviceHealth} />
 
       <DecisionExplanationSheet
@@ -877,42 +881,6 @@ export default function HomeTab({ connectedDevices, now, latestCycleHeartbeat }:
         reasoning={selectedTimelineItem?.reasoning ?? []}
         onClose={() => setSelectedTimelineItem(null)}
       />
-
-      <div style={{ margin: "24px 0 0" }}>
-        <div style={{ borderTop: "1px solid #0A1020" }}>
-          <CollapsibleSection label="Insights">
-            <NightlyReportCard />
-            {hasSolar && <SolarForecastCard />}
-            {hasBattery && <BatteryHealthScore />}
-            <TariffSwitcher connectedDevices={connectedDevices} />
-          </CollapsibleSection>
-        </div>
-
-        <div style={{ borderTop: "1px solid #0A1020" }}>
-          <CollapsibleSection label="Home settings">
-            {connectedDevices.map((device) => (
-              <DeviceRow key={device.id} device={device} />
-            ))}
-            <button
-              onClick={() => {
-                window.location.href = "/onboarding";
-              }}
-              style={{ width: "100%", background: "none", border: "none", padding: "14px 20px", cursor: "pointer", fontFamily: "inherit", fontSize: 13, color: "#2D3A4A", fontWeight: 500, textAlign: "left" }}
-            >
-              Add device
-            </button>
-          </CollapsibleSection>
-        </div>
-
-        <div style={{ borderTop: "1px solid #0A1020" }}>
-          <CollapsibleSection label="Manual controls (if needed)">
-            {hasEV && <EVReadyBy />}
-            {hasBattery && <BatteryReserve />}
-            <ManualOverride currentPence={currentPence} connectedDevices={connectedDevices} />
-            <ChargerLock connectedDevices={connectedDevices} />
-          </CollapsibleSection>
-        </div>
-      </div>
     </div>
   );
 }

@@ -27,6 +27,53 @@ function formatPence(value: number): string {
   return `${value.toFixed(2)} p/kWh`;
 }
 
+function ensureSentence(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function humanizeIdentifier(value: string): string {
+  return value.replace(/_/g, " ").toLowerCase();
+}
+
+function buildActionSummary(decisionType: string, decisionReason?: string): string {
+  const normalizedDecisionType = decisionType.trim().toLowerCase();
+
+  switch (normalizedDecisionType) {
+    case "charge_battery":
+      return "Charging battery";
+    case "discharge_battery":
+      return "Powering home from battery";
+    case "charge_ev":
+    case "start_charging":
+      return "Charging EV";
+    case "stop_charging":
+      return "Stopping EV charging";
+    case "export_to_grid":
+      return "Exporting to grid";
+    case "consume_solar":
+      return "Running home on solar";
+    case "hold":
+      return "System is idle";
+    case "selected_opportunity":
+      return "Acting now";
+    default:
+      if (normalizedDecisionType.startsWith("rejected_")) {
+        return "Not acting right now";
+      }
+
+      if (decisionReason) {
+        return ensureSentence(decisionReason).replace(/[.]$/, "");
+      }
+
+      return ensureSentence(humanizeIdentifier(normalizedDecisionType)).replace(/[.]$/, "");
+  }
+}
+
 function pushIfAbsent(target: string[], value: string): void {
   if (!target.includes(value)) {
     target.push(value);
@@ -54,75 +101,76 @@ export function generateDecisionExplanation(
   const drivers: string[] = [];
 
   if (decision.decisionReason) {
-    pushIfAbsent(drivers, `Decision reason: ${decision.decisionReason}`);
+    pushIfAbsent(drivers, ensureSentence(decision.decisionReason));
   }
 
   if (decision.planningConfidenceLevel) {
-    pushIfAbsent(drivers, `Planning confidence: ${decision.planningConfidenceLevel}.`);
+    pushIfAbsent(drivers, `Current planning confidence is ${decision.planningConfidenceLevel}.`);
   }
 
   if (decision.economicSignals?.effectiveStoredEnergyValuePencePerKwh !== undefined) {
     pushIfAbsent(
       drivers,
-      `Effective stored-energy value: ${formatPence(decision.economicSignals.effectiveStoredEnergyValuePencePerKwh)}.`,
+      `Stored energy is worth ${formatPence(decision.economicSignals.effectiveStoredEnergyValuePencePerKwh)} right now.`,
     );
   } else if (decision.economicSignals?.netStoredEnergyValuePencePerKwh !== undefined) {
     pushIfAbsent(
       drivers,
-      `Net stored-energy value: ${formatPence(decision.economicSignals.netStoredEnergyValuePencePerKwh)}.`,
+      `Stored energy value after battery wear is ${formatPence(decision.economicSignals.netStoredEnergyValuePencePerKwh)}.`,
     );
   }
 
   if (decision.economicSignals?.marginalImportAvoidancePencePerKwh !== undefined) {
     pushIfAbsent(
       drivers,
-      `Import-avoidance signal: ${formatPence(decision.economicSignals.marginalImportAvoidancePencePerKwh)}.`,
+      `Avoiding grid imports is worth ${formatPence(decision.economicSignals.marginalImportAvoidancePencePerKwh)} right now.`,
     );
   }
 
   if (decision.economicSignals?.exportValuePencePerKwh !== undefined) {
     pushIfAbsent(
       drivers,
-      `Export-value signal: ${formatPence(decision.economicSignals.exportValuePencePerKwh)}.`,
+      `Exporting now is worth ${formatPence(decision.economicSignals.exportValuePencePerKwh)}.`,
     );
   }
 
   if (decision.conservativeAdjustmentApplied && decision.conservativeAdjustmentReason) {
-    pushIfAbsent(drivers, `Conservative adjustment active: ${decision.conservativeAdjustmentReason}`);
+    pushIfAbsent(drivers, `Runtime is staying conservative: ${ensureSentence(decision.conservativeAdjustmentReason)}`);
   }
 
   if ((decision.reasonCodes?.length ?? 0) > 0) {
-    pushIfAbsent(drivers, `Decision constraints: ${(decision.reasonCodes ?? []).slice(0, 2).join(", ")}.`);
+    pushIfAbsent(
+      drivers,
+      `Current constraints still apply: ${(decision.reasonCodes ?? [])
+        .slice(0, 2)
+        .map((code) => humanizeIdentifier(code))
+        .join(", ")}.`,
+    );
   }
 
   if (context.executionPosture !== "normal") {
-    pushIfAbsent(drivers, `Runtime execution posture: ${context.executionPosture}.`);
+    pushIfAbsent(drivers, `Runtime posture is ${humanizeIdentifier(context.executionPosture)}.`);
   }
 
-  pushIfAbsent(drivers, `Decision outcome: ${decision.decisionType}.`);
-  pushIfAbsent(drivers, `Opportunity: ${decision.opportunityId}.`);
-
   if (drivers.length < 2) {
-    pushIfAbsent(drivers, `Target device: ${decision.targetDeviceId ?? "unknown"}.`);
+    pushIfAbsent(drivers, `This applies to the current ${humanizeIdentifier(decision.decisionType)} decision.`);
   }
 
   const boundedDrivers = drivers.slice(0, 5);
   const confidence = mapConfidenceFromPlanningLevel(decision.planningConfidenceLevel);
 
-  const summary = decision.decisionReason
-    ? `Decision ${decision.decisionType} for opportunity ${decision.opportunityId}: ${decision.decisionReason}`
-    : `Decision ${decision.decisionType} for opportunity ${decision.opportunityId}.`;
+  const summary = buildActionSummary(decision.decisionType, decision.decisionReason);
 
   const caution =
     decision.conservativeAdjustmentReason
     ?? decision.reasonCodes?.[0]
     ?? (context.executionPosture !== "normal"
-      ? `Runtime execution posture: ${context.executionPosture}.`
+      ? `Runtime posture is ${humanizeIdentifier(context.executionPosture)}.`
       : null);
 
   const confidenceReason = decision.planningConfidenceLevel
-    ? `Planning confidence signal: ${decision.planningConfidenceLevel}.`
-    : "Planning confidence signal not provided.";
+    ? `Current planning confidence is ${decision.planningConfidenceLevel}.`
+    : "Planning confidence is not available.";
 
   return {
     summary,

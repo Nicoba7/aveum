@@ -21,6 +21,11 @@ import { InMemoryDeviceCapabilitiesProvider } from "../../capabilities/deviceCap
 import { InMemoryObservedDeviceStateStore } from "../../observed/observedDeviceStateStore";
 import { runSingleTeslaCycle } from "../../application/runtime/runSingleTeslaCycle";
 import {
+  buildConstraintsForPlanningStyle,
+  resolvePlanningStyle,
+  type PlanningStyleSourceEnvironment,
+} from "../../application/runtime/planningStyleStore";
+import {
   TeslaContinuousCycleExecutor,
   type ContinuousLiveExecutionEnvironment,
 } from "../../application/runtime/teslaContinuousCycleExecutor";
@@ -34,7 +39,9 @@ export interface TeslaRuntimeIntegrationSource
   extends GridlyContinuousRuntimeSource,
     TeslaSingleRunRuntimeConfigSource {
   GRIDLY_TIMEZONE?: string;
+  GRIDLY_PLANNING_STYLE?: string;
   GRIDLY_OPTIMIZATION_MODE?: string;
+  GRIDLY_CONFIG_DIR?: string;
   GRIDLY_TARIFF_SOURCE?: string;
   GRIDLY_OCTOPUS_REGION?: string;
   GRIDLY_OCTOPUS_PRODUCT?: string;
@@ -51,41 +58,6 @@ export interface TeslaRuntimeIntegrationDependencies {
     fallbackTariffSchedule: ReturnType<typeof getCanonicalSimulationSnapshot>["tariffSchedule"];
     sourceEnv: TeslaRuntimeIntegrationSource;
   }) => Promise<RuntimeTariffResolution>;
-}
-
-function resolveOptimizationMode(modeRaw: string | undefined): OptimizationMode {
-  if (!modeRaw || modeRaw.trim() === "") {
-    return "balanced";
-  }
-
-  const normalizedMode = modeRaw.trim().toLowerCase();
-  if (
-    normalizedMode === "cost" ||
-    normalizedMode === "balanced" ||
-    normalizedMode === "self_consumption" ||
-    normalizedMode === "carbon"
-  ) {
-    return normalizedMode;
-  }
-
-  return "balanced";
-}
-
-function buildConstraints(devices: DeviceState[], mode: OptimizationMode): OptimizerInput["constraints"] {
-  const hasBattery = devices.some((device) => device.kind === "battery");
-  const hasGrid = devices.some((device) => device.kind === "smart_meter");
-  const hasEv = devices.some((device) => device.kind === "ev_charger");
-
-  return {
-    mode,
-    batteryReservePercent: 30,
-    maxBatteryCyclesPerDay: 2,
-    allowGridBatteryCharging: hasBattery && hasGrid,
-    allowBatteryExport: hasBattery && hasGrid,
-    allowAutomaticEvCharging: hasEv,
-    evReadyBy: "07:00",
-    evTargetSocPercent: 85,
-  };
 }
 
 function ensureTeslaDeviceIdentity(systemState: SystemState, vehicleId: string, nowIso: string): SystemState {
@@ -188,7 +160,8 @@ export function createTeslaRuntimeIntegration(): ContinuousRuntimeIntegration<
       const getSnapshot = dependencies?.getSnapshot ?? getCanonicalSimulationSnapshot;
       const optimizeInput = dependencies?.optimizeInput ?? optimize;
       const resolveTariffSchedule = dependencies?.resolveTariffSchedule ?? resolveRuntimeTariffSchedule;
-      const optimizationMode = resolveOptimizationMode(source.GRIDLY_OPTIMIZATION_MODE);
+      const resolvedPlanningStyle = resolvePlanningStyle(source as PlanningStyleSourceEnvironment);
+      const optimizationMode = resolvedPlanningStyle.profile.optimizationMode;
       const runtime = dependencies?.bootstrapFromSource
         ? dependencies.bootstrapFromSource({
             TESLA_ACCESS_TOKEN: source.TESLA_ACCESS_TOKEN,
@@ -270,6 +243,7 @@ export function createTeslaRuntimeIntegration(): ContinuousRuntimeIntegration<
           capabilitiesProvider: buildTeslaCapabilitiesProvider(systemState.devices),
           journalStore: input.journalStore,
           cycleFinancialContext: {
+            planningStyle: resolvedPlanningStyle.activeStyle,
             optimizationMode,
             valueLedger,
             planningInputCoverage: currentPlan.planningInputCoverage,
@@ -307,7 +281,7 @@ export function createTeslaRuntimeIntegration(): ContinuousRuntimeIntegration<
               systemState,
               forecasts: snapshot.forecasts,
               tariffSchedule: tariffResolution.tariffSchedule,
-              constraints: buildConstraints(systemState.devices, optimizationMode),
+              constraints: buildConstraintsForPlanningStyle(systemState.devices, resolvedPlanningStyle),
             });
           },
           resolveExecutionEnvironment: ({ nowIso, currentPlan }) =>

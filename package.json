@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "dev:single-run": "vite-node src/application/runtime/runDevSingleRunLocal.entry.ts",
     "tesla:single-run": "vite-node src/application/runtime/runTeslaSingleRunLocal.entry.ts",
     "tesla:continuous-live": "vite-node src/application/runtime/runTeslaContinuousLive.entry.ts"
   },

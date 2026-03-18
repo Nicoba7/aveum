@@ -10,7 +10,6 @@ export default function OptimisationModeSelector({
 }) {
   return (
     <div style={{ margin: "0 20px 12px" }}>
-      <div style={{ fontSize: 11, color: "#5D6B80", marginBottom: 8 }}>Change only if tomorrow needs a different priority.</div>
       <div style={{ display: "flex", gap: 7 }}>
         {viewModel.options.map((option) => {
           const active = viewModel.mode === option.id;

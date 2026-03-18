@@ -1,10 +1,12 @@
-import type { DeviceState, OptimizationMode, OptimizerInput, SystemState } from "../../domain";
+import type { DeviceState, OptimizationMode, OptimizerInput, PlanningStyle, SystemState } from "../../domain";
 import type { CanonicalValueLedger } from "../../domain/valueLedger";
 import type { OptimizerOutput } from "../../domain/optimizer";
 import { optimize } from "../../optimizer/engine";
 import { getCanonicalSimulationSnapshot } from "../../simulator";
 import { InMemoryExecutionJournalStore } from "../../journal/executionJournalStore";
+import { FileExecutionJournalStore } from "../../journal/fileExecutionJournalStore";
 import type { ExecutionJournalEntry } from "../../journal/executionJournal";
+import { resolveJournalDirectoryPath } from "../../journal/journalDirectory";
 import { buildCanonicalValueLedger } from "./buildCanonicalValueLedger";
 import {
   resolveRuntimeTariffSchedule,
@@ -16,17 +18,33 @@ import {
   type TeslaSingleRunRuntimeConfigSource,
   bootstrapTeslaSingleRunRuntimeFromSource,
 } from "./teslaSingleRunBootstrap";
+import {
+  buildConstraintsForPlanningStyle,
+  resolvePlanningStyle,
+  type PlanningStyleSourceEnvironment,
+  type ResolvedPlanningStyle,
+} from "./planningStyleStore";
 
 export interface TeslaLocalSingleRunSource extends TeslaSingleRunRuntimeConfigSource {
   GRIDLY_NOW_ISO?: string;
   GRIDLY_SITE_ID?: string;
   GRIDLY_TIMEZONE?: string;
+  GRIDLY_PLANNING_STYLE?: string;
   GRIDLY_OPTIMIZATION_MODE?: string;
+  GRIDLY_CONFIG_DIR?: string;
+  GRIDLY_JOURNAL_DIR?: string;
   GRIDLY_TARIFF_SOURCE?: string;
   GRIDLY_OCTOPUS_REGION?: string;
   GRIDLY_OCTOPUS_PRODUCT?: string;
   GRIDLY_OCTOPUS_EXPORT_PRODUCT?: string;
   GRIDLY_OCTOPUS_EXPORT_TARIFF_CODE?: string;
+}
+
+export interface TeslaLocalPlanningStyleSummary {
+  requestedStyle?: string;
+  activeStyle: PlanningStyle;
+  source: ResolvedPlanningStyle["source"];
+  defaulted: boolean;
 }
 
 export interface TeslaLocalOptimizationModeSummary {
@@ -46,6 +64,7 @@ export interface TeslaLocalSingleRunControlLoopSummary {
 export interface TeslaLocalSingleRunSuccessSummary {
   status: "ok";
   now: string;
+  planningStyle: TeslaLocalPlanningStyleSummary;
   optimizationMode: TeslaLocalOptimizationModeSummary;
   config: {
     vehicleId: string;
@@ -89,6 +108,7 @@ export interface TeslaLocalSingleRunSuccessSummary {
 export interface TeslaLocalSingleRunErrorSummary {
   status: "error";
   now: string;
+  planningStyle?: TeslaLocalPlanningStyleSummary;
   optimizationMode?: TeslaLocalOptimizationModeSummary;
   error: {
     stage: "bootstrap" | "runtime";
@@ -104,11 +124,31 @@ export interface TeslaLocalSingleRunDependencies {
   bootstrapFromSource?: (source: TeslaSingleRunRuntimeConfigSource) => TeslaSingleRunRuntime;
   getSnapshot?: (now: Date) => ReturnType<typeof getCanonicalSimulationSnapshot>;
   optimizeInput?: (input: OptimizerInput) => OptimizerOutput;
+  journalStoreFactory?: (source: TeslaLocalSingleRunSource) => {
+    getAll(): ExecutionJournalEntry[];
+  } & Pick<InMemoryExecutionJournalStore, "append" | "appendDecisionExplanation" | "appendHeartbeat" | "getDecisionExplanations" | "getCycleHeartbeats" | "getByDecisionId" | "getByDeviceId">;
   resolveTariffSchedule?: (params: {
     now: Date;
     fallbackTariffSchedule: ReturnType<typeof getCanonicalSimulationSnapshot>["tariffSchedule"];
     sourceEnv: TeslaLocalSingleRunSource;
   }) => Promise<RuntimeTariffResolution>;
+}
+
+function buildTeslaLocalJournalStore(
+  source: TeslaLocalSingleRunSource,
+  dependencies?: TeslaLocalSingleRunDependencies,
+) {
+  if (dependencies?.journalStoreFactory) {
+    return dependencies.journalStoreFactory(source);
+  }
+
+  if (!dependencies) {
+    return new FileExecutionJournalStore({
+      directoryPath: resolveJournalDirectoryPath(source),
+    });
+  }
+
+  return new InMemoryExecutionJournalStore();
 }
 
 function parseNow(nowIso: string | undefined): Date {
@@ -124,56 +164,32 @@ function parseNow(nowIso: string | undefined): Date {
   return parsed;
 }
 
-function resolveOptimizationMode(modeRaw: string | undefined): TeslaLocalOptimizationModeSummary {
-  if (!modeRaw || modeRaw.trim() === "") {
-    return {
-      activeMode: "balanced",
-      defaulted: false,
-    };
-  }
-
-  const requestedMode = modeRaw.trim();
-  const normalizedMode = requestedMode.toLowerCase();
-
-  if (
-    normalizedMode === "cost" ||
-    normalizedMode === "balanced" ||
-    normalizedMode === "self_consumption" ||
-    normalizedMode === "carbon"
-  ) {
-    return {
-      requestedMode,
-      activeMode: normalizedMode,
-      defaulted: false,
-    };
-  }
-
+function buildOptimizationModeSummary(
+  resolvedPlanningStyle: ResolvedPlanningStyle,
+  source: TeslaLocalSingleRunSource,
+): TeslaLocalOptimizationModeSummary {
   return {
-    requestedMode,
-    activeMode: "balanced",
-    defaulted: true,
+    requestedMode: source.GRIDLY_OPTIMIZATION_MODE?.trim() || undefined,
+    activeMode: resolvedPlanningStyle.profile.optimizationMode,
+    defaulted:
+      Boolean(source.GRIDLY_OPTIMIZATION_MODE?.trim()) && resolvedPlanningStyle.source !== "legacy_mode"
+        ? true
+        : resolvedPlanningStyle.source === "default",
   };
 }
 
-function buildConstraints(devices: DeviceState[], mode: OptimizationMode): OptimizerInput["constraints"] {
-  const hasBattery = devices.some((device) => device.kind === "battery");
-  const hasGrid = devices.some((device) => device.kind === "smart_meter");
-  const hasEv = devices.some((device) => device.kind === "ev_charger");
-
+function buildPlanningStyleSummary(resolvedPlanningStyle: ResolvedPlanningStyle): TeslaLocalPlanningStyleSummary {
   return {
-    mode,
-    batteryReservePercent: 30,
-    maxBatteryCyclesPerDay: 2,
-    allowGridBatteryCharging: hasBattery && hasGrid,
-    allowBatteryExport: hasBattery && hasGrid,
-    allowAutomaticEvCharging: hasEv,
-    evReadyBy: "07:00",
-    evTargetSocPercent: 85,
+    requestedStyle: resolvedPlanningStyle.requestedValue,
+    activeStyle: resolvedPlanningStyle.activeStyle,
+    source: resolvedPlanningStyle.source,
+    defaulted: resolvedPlanningStyle.defaulted,
   };
 }
 
 function ensureTeslaDeviceIdentity(systemState: SystemState, vehicleId: string, nowIso: string): SystemState {
   let hasMappedTeslaDevice = false;
+  const teslaCapabilities: DeviceState["capabilities"] = ["start_stop", "read_soc", "read_power"];
 
   const devices = systemState.devices.map((device) => {
     if (device.kind !== "ev_charger" || hasMappedTeslaDevice) {
@@ -186,9 +202,12 @@ function ensureTeslaDeviceIdentity(systemState: SystemState, vehicleId: string, 
       deviceId: vehicleId,
       brand: "Tesla",
       name: "Tesla Vehicle Charger",
-      connectionStatus: "online",
+      connectionStatus: "online" as const,
       lastUpdatedAt: nowIso,
-      capabilities: Array.from(new Set([...(device.capabilities ?? []), "start_stop", "read_soc", "read_power"])),
+      capabilities: Array.from(new Set<DeviceState["capabilities"][number]>([
+        ...(device.capabilities ?? []),
+        ...teslaCapabilities,
+      ])),
     };
   });
 
@@ -208,16 +227,18 @@ function ensureTeslaDeviceIdentity(systemState: SystemState, vehicleId: string, 
         kind: "ev_charger",
         brand: "Tesla",
         name: "Tesla Vehicle Charger",
-        connectionStatus: "online",
+        connectionStatus: "online" as const,
         lastUpdatedAt: nowIso,
-        capabilities: ["start_stop", "read_soc", "read_power"],
+        capabilities: teslaCapabilities,
         connected: true,
       },
     ],
   };
 }
 
-function summarizeControlLoopResult(result: Awaited<ReturnType<TeslaSingleRunRuntime["runCycle"]>>): TeslaLocalSingleRunControlLoopSummary {
+function summarizeControlLoopResult(
+  result: Awaited<ReturnType<TeslaSingleRunRuntime["runCycle"]>>,
+): TeslaLocalSingleRunControlLoopSummary {
   return {
     activeDecisionCount: result.controlLoopResult.activeDecisions.length,
     commandCount: result.controlLoopResult.commandsToIssue.length,
@@ -260,7 +281,9 @@ export async function runTeslaSingleRunLocal(
   const getSnapshot = dependencies?.getSnapshot ?? getCanonicalSimulationSnapshot;
   const optimizeInput = dependencies?.optimizeInput ?? optimize;
   const resolveTariffSchedule = dependencies?.resolveTariffSchedule ?? resolveRuntimeTariffSchedule;
-  const optimizationMode = resolveOptimizationMode(source.GRIDLY_OPTIMIZATION_MODE);
+  const resolvedPlanningStyle = resolvePlanningStyle(source as PlanningStyleSourceEnvironment);
+  const planningStyle = buildPlanningStyleSummary(resolvedPlanningStyle);
+  const optimizationMode = buildOptimizationModeSummary(resolvedPlanningStyle, source);
 
   try {
     const now = parseNow(source.GRIDLY_NOW_ISO);
@@ -286,11 +309,12 @@ export async function runTeslaSingleRunLocal(
     };
 
     const systemState = ensureTeslaDeviceIdentity(baseSystemState, runtime.config.vehicleId, nowIso);
+    const constraints = buildConstraintsForPlanningStyle(systemState.devices, resolvedPlanningStyle);
     const optimizerOutput = optimizeInput({
       systemState,
       forecasts: snapshot.forecasts,
       tariffSchedule: tariffResolution.tariffSchedule,
-      constraints: buildConstraints(systemState.devices, optimizationMode.activeMode),
+      constraints,
     });
 
     const valueLedger = buildCanonicalValueLedger({
@@ -300,7 +324,7 @@ export async function runTeslaSingleRunLocal(
       tariffSchedule: tariffResolution.tariffSchedule,
     });
 
-    const journalStore = new InMemoryExecutionJournalStore();
+    const journalStore = buildTeslaLocalJournalStore(source, dependencies);
 
     const result = await runtime.runCycle({
       now: nowIso,
@@ -310,6 +334,7 @@ export async function runTeslaSingleRunLocal(
       optimizerOutput,
       journalStore,
       cycleFinancialContext: {
+        planningStyle: planningStyle.activeStyle,
         optimizationMode: optimizationMode.activeMode,
         valueLedger,
         planningInputCoverage: optimizerOutput.planningInputCoverage,
@@ -324,6 +349,7 @@ export async function runTeslaSingleRunLocal(
     return {
       status: "ok",
       now: nowIso,
+      planningStyle,
       optimizationMode,
       config: {
         vehicleId: runtime.config.vehicleId,
@@ -360,13 +386,16 @@ export async function runTeslaSingleRunLocal(
     return {
       status: "error",
       now: new Date().toISOString(),
+      planningStyle,
       optimizationMode,
       error: normalizeError(error),
     };
   }
 }
 
-export async function runTeslaSingleRunLocalCli(source: TeslaLocalSingleRunSource = process.env): Promise<number> {
+export async function runTeslaSingleRunLocalCli(
+  source: TeslaLocalSingleRunSource = process.env as TeslaLocalSingleRunSource,
+): Promise<number> {
   const summary = await runTeslaSingleRunLocal(source);
 
   if (summary.status === "ok") {
