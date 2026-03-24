@@ -239,26 +239,86 @@
         "bestNetEnergyCostStrategyId": "aveum"
       },
       "winnerStrategyId": "aveum"
+    },
+    {
+      "scenarioName": "Real Agile Day (6 Jan 2025, Region C)",
+      "comparison": {
+        "rows": [
+          {
+            "strategyId": "aveum",
+            "strategyName": "Aveum (Canonical Engine)",
+            "totalImportCost": 3.8932,
+            "totalExportRevenue": 0,
+            "netEnergyCost": 3.8932,
+            "evTargetMissPenalty": 0,
+            "adjustedNetEnergyCost": 3.8932,
+            "evEnergyDeliveredKwh": 15.6955,
+            "evTargetAchieved": true,
+            "batteryThroughputKwh": 13.1,
+            "estimatedBatteryCycles": 0.4852,
+            "solarSelfConsumption": 1,
+            "solarSpillExportKwh": 0,
+            "negativePriceCaptureKwh": 0,
+            "reserveViolationsCount": 0
+          },
+          {
+            "strategyId": "predbat-like",
+            "strategyName": "PredBat-like (Greedy)",
+            "totalImportCost": 4.476,
+            "totalExportRevenue": 0.1816,
+            "netEnergyCost": 4.2945,
+            "evTargetMissPenalty": 500,
+            "adjustedNetEnergyCost": 504.2945,
+            "evEnergyDeliveredKwh": 14,
+            "evTargetAchieved": false,
+            "batteryThroughputKwh": 12.19,
+            "estimatedBatteryCycles": 0.4515,
+            "solarSelfConsumption": 0.8653,
+            "solarSpillExportKwh": 1.685,
+            "negativePriceCaptureKwh": 0,
+            "reserveViolationsCount": 0
+          },
+          {
+            "strategyId": "set-and-forget",
+            "strategyName": "Set and Forget",
+            "totalImportCost": 4.675,
+            "totalExportRevenue": 0.1816,
+            "netEnergyCost": 4.4934,
+            "evTargetMissPenalty": 500,
+            "adjustedNetEnergyCost": 504.4934,
+            "evEnergyDeliveredKwh": 14,
+            "evTargetAchieved": false,
+            "batteryThroughputKwh": 12,
+            "estimatedBatteryCycles": 0.4444,
+            "solarSelfConsumption": 0.8653,
+            "solarSpillExportKwh": 1.685,
+            "negativePriceCaptureKwh": 0,
+            "reserveViolationsCount": 0
+          }
+        ],
+        "bestNetEnergyCostStrategyId": "aveum"
+      },
+      "winnerStrategyId": "aveum"
     }
   ],
   "overall": {
     "set-and-forget": {
-      "avgNetEnergyCost": 503.494925,
-      "avgImportCost": 4.665274999999999,
-      "avgExportRevenue": 1.1703249999999998,
+      "avgNetEnergyCost": 503.69462000000004,
+      "avgImportCost": 4.6672199999999995,
+      "avgExportRevenue": 0.97258,
       "scenariosWon": 0
     },
     "predbat-like": {
-      "avgNetEnergyCost": 503.483725,
-      "avgImportCost": 4.645475,
-      "avgExportRevenue": 1.1617749999999998,
+      "avgNetEnergyCost": 503.64588000000003,
+      "avgImportCost": 4.61158,
+      "avgExportRevenue": 0.9657399999999999,
       "scenariosWon": 0
     },
     "aveum": {
-      "avgNetEnergyCost": 3.5566000000000004,
-      "avgImportCost": 4.29295,
-      "avgExportRevenue": 0.7363500000000001,
-      "scenariosWon": 4
+      "avgNetEnergyCost": 3.6239200000000005,
+      "avgImportCost": 4.213,
+      "avgExportRevenue": 0.58908,
+      "scenariosWon": 5
     }
   }
 }
