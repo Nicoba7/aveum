@@ -1,0 +1,190 @@
+{
+  "scenarios": [
+    {
+      "scenarioName": "Sample spring weekday",
+      "comparison": {
+        "rows": [
+          {
+            "strategyId": "set-and-forget",
+            "strategyName": "Set and Forget",
+            "totalImportCost": 3.4894,
+            "totalExportRevenue": 1.5731,
+            "netEnergyCost": 1.9163,
+            "evTargetMissPenalty": 500,
+            "adjustedNetEnergyCost": 501.9163,
+            "evEnergyDeliveredKwh": 12,
+            "evTargetAchieved": false,
+            "batteryThroughputKwh": 11.57,
+            "estimatedBatteryCycles": 0.4285,
+            "solarSelfConsumption": 0.5338,
+            "solarSpillExportKwh": 11.61,
+            "negativePriceCaptureKwh": 0,
+            "reserveViolationsCount": 0
+          },
+          {
+            "strategyId": "predbat-like",
+            "strategyName": "PredBat-like (Greedy)",
+            "totalImportCost": 4.1228,
+            "totalExportRevenue": 1.5731,
+            "netEnergyCost": 2.5497,
+            "evTargetMissPenalty": 500,
+            "adjustedNetEnergyCost": 502.5498,
+            "evEnergyDeliveredKwh": 12,
+            "evTargetAchieved": false,
+            "batteryThroughputKwh": 6.7,
+            "estimatedBatteryCycles": 0.2481,
+            "solarSelfConsumption": 0.5338,
+            "solarSpillExportKwh": 11.61,
+            "negativePriceCaptureKwh": 0,
+            "reserveViolationsCount": 0
+          }
+        ],
+        "bestNetEnergyCostStrategyId": "set-and-forget"
+      },
+      "winnerStrategyId": "set-and-forget"
+    },
+    {
+      "scenarioName": "Normal weekday",
+      "comparison": {
+        "rows": [
+          {
+            "strategyId": "set-and-forget",
+            "strategyName": "Set and Forget",
+            "totalImportCost": 4.8484,
+            "totalExportRevenue": 0.2015,
+            "netEnergyCost": 4.6469,
+            "evTargetMissPenalty": 500,
+            "adjustedNetEnergyCost": 504.6469,
+            "evEnergyDeliveredKwh": 14,
+            "evTargetAchieved": false,
+            "batteryThroughputKwh": 12,
+            "estimatedBatteryCycles": 0.4444,
+            "solarSelfConsumption": 0.8653,
+            "solarSpillExportKwh": 1.685,
+            "negativePriceCaptureKwh": 0,
+            "reserveViolationsCount": 0
+          },
+          {
+            "strategyId": "predbat-like",
+            "strategyName": "PredBat-like (Greedy)",
+            "totalImportCost": 5.5689,
+            "totalExportRevenue": 0.2015,
+            "netEnergyCost": 5.3674,
+            "evTargetMissPenalty": 500,
+            "adjustedNetEnergyCost": 505.3674,
+            "evEnergyDeliveredKwh": 14,
+            "evTargetAchieved": false,
+            "batteryThroughputKwh": 6.31,
+            "estimatedBatteryCycles": 0.2337,
+            "solarSelfConsumption": 0.8653,
+            "solarSpillExportKwh": 1.685,
+            "negativePriceCaptureKwh": 0,
+            "reserveViolationsCount": 0
+          }
+        ],
+        "bestNetEnergyCostStrategyId": "set-and-forget"
+      },
+      "winnerStrategyId": "set-and-forget"
+    },
+    {
+      "scenarioName": "Negative price day",
+      "comparison": {
+        "rows": [
+          {
+            "strategyId": "predbat-like",
+            "strategyName": "PredBat-like (Greedy)",
+            "totalImportCost": 3.5432,
+            "totalExportRevenue": 2.6799,
+            "netEnergyCost": 0.8634,
+            "evTargetMissPenalty": 500,
+            "adjustedNetEnergyCost": 500.8634,
+            "evEnergyDeliveredKwh": 16,
+            "evTargetAchieved": false,
+            "batteryThroughputKwh": 13.245,
+            "estimatedBatteryCycles": 0.4906,
+            "solarSelfConsumption": 0.4289,
+            "solarSpillExportKwh": 18.84,
+            "negativePriceCaptureKwh": 2.845,
+            "reserveViolationsCount": 0
+          },
+          {
+            "strategyId": "set-and-forget",
+            "strategyName": "Set and Forget",
+            "totalImportCost": 4.2721,
+            "totalExportRevenue": 2.7141,
+            "netEnergyCost": 1.558,
+            "evTargetMissPenalty": 500,
+            "adjustedNetEnergyCost": 501.558,
+            "evEnergyDeliveredKwh": 16,
+            "evTargetAchieved": false,
+            "batteryThroughputKwh": 14.7,
+            "estimatedBatteryCycles": 0.5444,
+            "solarSelfConsumption": 0.4232,
+            "solarSpillExportKwh": 19.03,
+            "negativePriceCaptureKwh": 0.035,
+            "reserveViolationsCount": 0
+          }
+        ],
+        "bestNetEnergyCostStrategyId": "predbat-like"
+      },
+      "winnerStrategyId": "predbat-like"
+    },
+    {
+      "scenarioName": "Evening spike day",
+      "comparison": {
+        "rows": [
+          {
+            "strategyId": "predbat-like",
+            "strategyName": "PredBat-like (Greedy)",
+            "totalImportCost": 5.347,
+            "totalExportRevenue": 0.1926,
+            "netEnergyCost": 5.1543,
+            "evTargetMissPenalty": 500,
+            "adjustedNetEnergyCost": 505.1543,
+            "evEnergyDeliveredKwh": 12,
+            "evTargetAchieved": false,
+            "batteryThroughputKwh": 12.71,
+            "estimatedBatteryCycles": 0.4707,
+            "solarSelfConsumption": 0.8561,
+            "solarSpillExportKwh": 1.945,
+            "negativePriceCaptureKwh": 0,
+            "reserveViolationsCount": 0
+          },
+          {
+            "strategyId": "set-and-forget",
+            "strategyName": "Set and Forget",
+            "totalImportCost": 6.0512,
+            "totalExportRevenue": 0.1926,
+            "netEnergyCost": 5.8585,
+            "evTargetMissPenalty": 500,
+            "adjustedNetEnergyCost": 505.8585,
+            "evEnergyDeliveredKwh": 12,
+            "evTargetAchieved": false,
+            "batteryThroughputKwh": 12.29,
+            "estimatedBatteryCycles": 0.4552,
+            "solarSelfConsumption": 0.8561,
+            "solarSpillExportKwh": 1.945,
+            "negativePriceCaptureKwh": 0,
+            "reserveViolationsCount": 0
+          }
+        ],
+        "bestNetEnergyCostStrategyId": "predbat-like"
+      },
+      "winnerStrategyId": "predbat-like"
+    }
+  ],
+  "overall": {
+    "set-and-forget": {
+      "avgNetEnergyCost": 503.494925,
+      "avgImportCost": 4.665274999999999,
+      "avgExportRevenue": 1.1703249999999998,
+      "scenariosWon": 2
+    },
+    "predbat-like": {
+      "avgNetEnergyCost": 503.483725,
+      "avgImportCost": 4.645475,
+      "avgExportRevenue": 1.1617749999999998,
+      "scenariosWon": 2
+    }
+  }
+}
