@@ -66,7 +66,7 @@ Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and 
 
 ## Local Tesla run-once
 
-Runs one real Tesla-backed Gridly observe → decide → act cycle locally and prints a structured JSON summary. No scheduler, no persistence, no UI involvement.
+Runs one real Tesla-backed Aveum observe → decide → act cycle locally and prints a structured JSON summary. No scheduler, no persistence, no UI involvement.
 
 ### What it does
 
@@ -97,7 +97,7 @@ npm run tesla:single-run
 | `TESLA_BASE_URL` | Tesla Fleet API default | Override the Fleet API base URL (useful for regional endpoints) |
 | `TESLA_TIMEOUT_MS` | `10000` | HTTP request timeout in milliseconds |
 | `GRIDLY_NOW_ISO` | Current system time | ISO-8601 timestamp to use as the control-loop clock |
-| `GRIDLY_SITE_ID` | Simulator default | Gridly site identifier written into telemetry and journal entries |
+| `GRIDLY_SITE_ID` | Simulator default | Aveum site identifier written into telemetry and journal entries |
 | `GRIDLY_TIMEZONE` | Simulator default | IANA timezone for tariff window and deadline evaluation |
 | `GRIDLY_OPTIMIZATION_MODE` | `balanced` | Optimisation objective: `cost`, `balanced`, `self_consumption`, or `carbon` (invalid values safely default to `balanced`) |
 | `GRIDLY_OCTOPUS_EXPORT_PRODUCT` | import product | Optional Octopus export product code |
@@ -143,7 +143,7 @@ This command runs exactly one cycle and exits. It does not poll, schedule, persi
 
 ## Local dev run-once
 
-Runs one stubbed-input Gridly observe -> decide -> act cycle locally and persists the output to the same durable journal used by `/api/runtime-truth`.
+Runs one stubbed-input Aveum observe -> decide -> act cycle locally and persists the output to the same durable journal used by `/api/runtime-truth`.
 
 ### What it does
 
