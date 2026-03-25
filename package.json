@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "benchmark": "vite-node benchmarks/runBenchmark.ts",
+    "onboard": "vite-node src/features/onboarding/betaOnboarding.ts",
     "dev:single-run": "vite-node src/application/runtime/runDevSingleRunLocal.entry.ts",
     "tesla:single-run": "vite-node src/application/runtime/runTeslaSingleRunLocal.entry.ts",
     "solcast:single-run": "vite-node src/application/runtime/runTeslaSingleRunLocal.entry.ts",
