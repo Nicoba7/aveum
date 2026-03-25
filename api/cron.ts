@@ -4,7 +4,7 @@
 // Triggered daily at 01:00 UTC by the schedule in vercel.json.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
 import { optimize } from "../src/optimizer/engine";
 import { getCanonicalSimulationSnapshot } from "../src/simulator";
 import { buildDailySavingsReport } from "../src/features/report/dailySavingsReport";
@@ -12,11 +12,16 @@ import { sendMorningReport } from "../src/features/notifications/morningEmailRep
 import type { OptimizationMode, TariffSchedule } from "../src/domain";
 import type { StoredUser } from "./register";
 
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
+
 const KV_KEY = "aveum:users";
 
 async function readStoredUsers(): Promise<StoredUser[]> {
   try {
-    const raw = await kv.lrange<string>(KV_KEY, 0, -1);
+    const raw = await redis.lrange<string>(KV_KEY, 0, -1);
     return raw.map((entry) => JSON.parse(entry) as StoredUser);
   } catch {
     return [];

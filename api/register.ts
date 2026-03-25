@@ -2,8 +2,13 @@
 // Accepts a POST with user config, pushes to Vercel KV, returns { success, userId }.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
 import * as crypto from "node:crypto";
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
 
 const KV_KEY = "aveum:users";
 
@@ -70,7 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   };
 
   try {
-    await kv.lpush(KV_KEY, JSON.stringify(newUser));
+    await redis.lpush(KV_KEY, JSON.stringify(newUser));
   } catch (err: unknown) {
     return res.status(500).json({
       error: `Failed to save user: ${err instanceof Error ? err.message : String(err)}`,

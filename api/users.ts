@@ -2,7 +2,12 @@
 // GET /api/users — returns the count of registered users. No personal data exposed.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
 
 const KV_KEY = "aveum:users";
 
@@ -14,7 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
   try {
-    const count = await kv.llen(KV_KEY);
+    const count = await redis.llen(KV_KEY);
     return res.status(200).json({ registeredUsers: count });
   } catch (err: unknown) {
     return res.status(500).json({
