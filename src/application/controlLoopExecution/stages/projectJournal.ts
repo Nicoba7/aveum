@@ -66,6 +66,7 @@ function buildCycleEconomicSnapshot(
     executionPosture !== "normal" && commandsSuppressed > 0 && hasValueSeekingDecisions;
 
   return {
+    planningStyle: ctx.planningStyle,
     optimizationMode: ctx.optimizationMode,
     planningConfidenceLevel: ctx.planningConfidenceLevel,
     conservativeAdjustmentApplied: ctx.conservativeAdjustmentApplied,

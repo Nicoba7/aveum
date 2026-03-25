@@ -2,6 +2,7 @@ import type {
   DeviceCapability,
   DeviceCommand,
   PlanningConfidenceLevel,
+  PlanningStyle,
   PlanningInputCoverage,
   OptimizerDecision,
   OptimizerDecisionTarget,
@@ -12,6 +13,7 @@ import type {
   OptimizerSummary,
   TimeWindow,
 } from "../domain";
+import { formatPlanningStyleLabel, getPlanningStylePolicyProfile } from "../domain";
 import { buildMarginalStoredEnergyValueProfile } from "./marginalStoredEnergyValue";
 
 export interface CanonicalRuntimeResult {
@@ -283,6 +285,72 @@ function buildModePolicy(mode: OptimizationMode): ModePolicy {
     evChargeThresholdFactor: 1,
     exportAttractivenessRatio: 0.9,
   };
+}
+
+function resolvePlanningStyle(mode: OptimizationMode, planningStyle: PlanningStyle | undefined): PlanningStyle {
+  if (planningStyle) {
+    return planningStyle;
+  }
+
+  if (mode === "cost") {
+    return "cheapest";
+  }
+
+  if (mode === "carbon" || mode === "self_consumption") {
+    return "greenest";
+  }
+
+  return "balanced";
+}
+
+function clampWeight(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return clamp(value, 0.25, 2);
+}
+
+function hoursUntilNextReadyBy(startAt: string, readyBy: string | undefined): number | undefined {
+  if (!readyBy) {
+    return undefined;
+  }
+
+  const [hours, minutes] = readyBy.split(":").map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return undefined;
+  }
+
+  const start = new Date(startAt);
+  if (Number.isNaN(start.getTime())) {
+    return undefined;
+  }
+
+  const ready = new Date(start);
+  ready.setUTCHours(hours, minutes, 0, 0);
+  if (ready.getTime() <= start.getTime()) {
+    ready.setUTCDate(ready.getUTCDate() + 1);
+  }
+
+  return (ready.getTime() - start.getTime()) / (60 * 60 * 1000);
+}
+
+function buildEvUrgencyFactor(params: {
+  startAt: string;
+  evReadyBy?: string;
+  evChargeUrgencyWeight?: number;
+  evDeadlineUrgencyHours?: number;
+}): number {
+  const baseWeight = clampWeight(params.evChargeUrgencyWeight, 1);
+  const urgencyWindowHours = Math.max(1, params.evDeadlineUrgencyHours ?? 3);
+  const hoursUntilReadyBy = hoursUntilNextReadyBy(params.startAt, params.evReadyBy);
+
+  if (hoursUntilReadyBy === undefined || hoursUntilReadyBy > urgencyWindowHours) {
+    return Number(baseWeight.toFixed(3));
+  }
+
+  const pressure = (urgencyWindowHours - hoursUntilReadyBy) / urgencyWindowHours;
+  return Number((baseWeight * (1 + pressure * 0.35)).toFixed(3));
 }
 
 function requiredCapabilitiesForTarget(
@@ -592,6 +660,9 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
   const planId = toPlanId(input.systemState.siteId, generatedAt, input.constraints.mode, horizonStartAt, horizonEndAt);
   const slotHours = input.forecasts.slotDurationMinutes / 60;
   const modePolicy = buildModePolicy(input.constraints.mode);
+  const activePlanningStyle = resolvePlanningStyle(input.constraints.mode, input.constraints.planningStyle);
+  const activePlanningStyleLabel = formatPlanningStyleLabel(activePlanningStyle);
+  const balancedPlanningStyleProfile = getPlanningStylePolicyProfile("balanced");
   const batteryDeviceIds = findDeviceIdsByKind(input, "battery");
   const evChargerDeviceIds = findDeviceIdsByKind(input, "ev_charger");
   const solarDeviceIds = findDeviceIdsByKind(input, "solar_inverter");
@@ -611,6 +682,8 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
     mode: input.constraints.mode,
     roundTripEfficiency: 0.9,
     batteryDegradationCostPencePerKwh: input.constraints.batteryDegradationCostPencePerKwh,
+    importAvoidanceWeight: input.constraints.importAvoidanceWeight,
+    exportPreferenceWeight: input.constraints.exportPreferenceWeight,
   });
   const forwardEffectiveValue = marginalStoredValue.points.map((_, index) =>
     Math.max(...marginalStoredValue.points.slice(index).map((point) => point.effectiveStoredEnergyValuePencePerKwh), 0),
@@ -632,6 +705,8 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
   let expectedBatteryDegradationCostPence = 0;
   let expectedSolarSelfConsumptionKwh = 0;
   let batteryThroughputKwh = 0;
+  let batteryChargeWindowsPlanned = 0;
+  let chargingBatteryInPreviousSlot = false;
 
   const decisions: OptimizerDecision[] = [];
 
@@ -662,15 +737,41 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       batterySoc > batteryReserve + 4 &&
       importRate >= highImportThreshold;
 
+    const evUrgencyFactor = buildEvUrgencyFactor({
+      startAt,
+      evReadyBy: input.constraints.evReadyBy,
+      evChargeUrgencyWeight: input.constraints.evChargeUrgencyWeight,
+      evDeadlineUrgencyHours: input.constraints.evDeadlineUrgencyHours,
+    });
+    const balancedModePolicy = buildModePolicy(balancedPlanningStyleProfile.optimizationMode);
+    const balancedEvUrgencyFactor = buildEvUrgencyFactor({
+      startAt,
+      evReadyBy: input.constraints.evReadyBy,
+      evChargeUrgencyWeight: balancedPlanningStyleProfile.runtimeInputs.evChargeUrgencyWeight,
+      evDeadlineUrgencyHours: balancedPlanningStyleProfile.runtimeInputs.evDeadlineUrgencyHours,
+    });
+    const currentEvThreshold = avgImportRate * modePolicy.evChargeThresholdFactor * evUrgencyFactor;
+    const balancedEvThreshold = avgImportRate * balancedModePolicy.evChargeThresholdFactor * balancedEvUrgencyFactor;
+
     const shouldChargeEv =
       hasEv &&
       evSoc !== undefined &&
       evSoc < (input.constraints.evTargetSocPercent ?? 85) &&
-      importRate <= avgImportRate * modePolicy.evChargeThresholdFactor;
+      importRate <= currentEvThreshold;
 
     const exportAttractivenessRatio = modePolicy.exportAttractivenessRatio + conservatismPolicy.exportAttractivenessPremiumRatio;
-    const exportAttractiveEnough = exportRate >= importRate * exportAttractivenessRatio;
     const valuePoint = marginalStoredValue.points[index];
+    const selfConsumptionPreferenceWeight = clampWeight(input.constraints.selfConsumptionPreferenceWeight, 1);
+    const exportPreferenceWeight = clampWeight(input.constraints.exportPreferenceWeight, 1);
+    const weightedExportValue = exportRate * exportPreferenceWeight;
+    const weightedSelfConsumptionValue = (valuePoint?.importAvoidancePencePerKwh ?? importRate) * selfConsumptionPreferenceWeight;
+    const exportAttractiveEnough = weightedExportValue >= weightedSelfConsumptionValue * exportAttractivenessRatio;
+    const balancedExportAttractivenessRatio = balancedModePolicy.exportAttractivenessRatio + conservatismPolicy.exportAttractivenessPremiumRatio;
+    const balancedExportAttractiveEnough =
+      exportRate * balancedPlanningStyleProfile.runtimeInputs.exportPreferenceWeight >=
+      (valuePoint?.importAvoidancePencePerKwh ?? importRate)
+        * balancedPlanningStyleProfile.runtimeInputs.selfConsumptionPreferenceWeight
+        * balancedExportAttractivenessRatio;
     const futureRetentionValue = forwardEffectiveValue[index + 1] ?? 0;
     const futureRetentionGrossValue = Math.max(
       ...marginalStoredValue.points.slice(index + 1).map((point) => point.grossStoredEnergyValuePencePerKwh),
@@ -688,6 +789,23 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
 
     const chargeForValue = chargeValueSpread >= conservatismPolicy.minValueSpreadPencePerKwh;
     const dischargeForValue = dischargeValueSpread >= conservatismPolicy.minValueSpreadPencePerKwh;
+    const styleSuppressesExport =
+      activePlanningStyle !== "balanced" &&
+      solarSurplusKwh > 0.05 &&
+      balancedExportAttractiveEnough &&
+      !exportAttractiveEnough;
+    const stylePullsForwardEvCharge =
+      activePlanningStyle !== "balanced" &&
+      importRate <= currentEvThreshold &&
+      importRate > balancedEvThreshold;
+    const canStartBatteryChargeWindow =
+      chargingBatteryInPreviousSlot ||
+      batteryChargeWindowsPlanned < (input.constraints.maxBatteryCyclesPerDay ?? Number.MAX_SAFE_INTEGER);
+    const styleCycleLimitBlocksCharging =
+      activePlanningStyle !== "balanced" &&
+      !chargingBatteryInPreviousSlot &&
+      batteryChargeWindowsPlanned >= (input.constraints.maxBatteryCyclesPerDay ?? Number.MAX_SAFE_INTEGER) &&
+      batteryChargeWindowsPlanned < balancedPlanningStyleProfile.runtimeInputs.maxBatteryCyclesPerDay;
 
     if (hasBattery && solarSurplusKwh > 0.05 && input.constraints.allowBatteryExport && exportAttractiveEnough) {
       action = "export_to_grid";
@@ -697,12 +815,16 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       targetDeviceIds = [...batteryDeviceIds, ...solarDeviceIds, ...gridDeviceIds];
     } else if (solarKwh >= loadKwh * 0.9) {
       action = "consume_solar";
-      reason = "Solar generation can cover most current demand.";
+      reason = styleSuppressesExport
+        ? `${activePlanningStyleLabel} keeps solar on site because self-consumption is currently preferred to export.`
+        : "Solar generation can cover most current demand.";
       expectedImportKwh = Math.max(0, loadKwh - solarKwh);
       targetDeviceIds = [...solarDeviceIds];
     } else if (shouldChargeEv) {
       action = "charge_ev";
-      reason = "Charging EV during a lower-cost import window.";
+      reason = stylePullsForwardEvCharge
+        ? `${activePlanningStyleLabel} brings EV charging forward because the ready-by deadline is close.`
+        : "Charging EV during a lower-cost import window.";
       const evChargeKwh = Math.min(2.0 * slotHours, Math.max(0, ((input.constraints.evTargetSocPercent ?? 85) - (evSoc ?? 0)) / 100 * evCapacityKwh));
       expectedImportKwh = Math.max(0, loadKwh - solarKwh) + evChargeKwh;
       targetDeviceIds = [...evChargerDeviceIds];
@@ -713,6 +835,7 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       hasBattery &&
       input.constraints.allowGridBatteryCharging &&
       batterySoc < 96 &&
+      canStartBatteryChargeWindow &&
       (
         chargeForValue ||
         (conservatismPolicy.allowHeuristicCycling && canChargeBattery)
@@ -728,6 +851,9 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       }
       const batteryChargeKwh = Math.min(1.6 * slotHours, ((100 - batterySoc) / 100) * batteryCapacityKwh);
       if (action === "charge_battery") {
+        if (!chargingBatteryInPreviousSlot) {
+          batteryChargeWindowsPlanned += 1;
+        }
         expectedImportKwh = Math.max(0, loadKwh - solarKwh) + batteryChargeKwh;
         targetDeviceIds = [...batteryDeviceIds];
         batterySoc = clamp(batterySoc + (batteryChargeKwh / batteryCapacityKwh) * 100, 0, 100);
@@ -780,9 +906,24 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       reason = `${reason} Conservative adjustment active: ${conservatismPolicy.conservativeAdjustmentReason}`;
     }
 
+    const balancedReserve = balancedPlanningStyleProfile.runtimeInputs.batteryReservePercent;
+    const styleReserveBlocksDischarge =
+      activePlanningStyle !== "balanced" &&
+      hasBattery &&
+      batterySoc > balancedReserve + 4 &&
+      batterySoc <= batteryReserve + 4 &&
+      importRate >= highImportThreshold;
+
+    if (action === "hold" && styleCycleLimitBlocksCharging) {
+      reason = `${activePlanningStyleLabel} limits battery charging to ${input.constraints.maxBatteryCyclesPerDay} window${input.constraints.maxBatteryCyclesPerDay === 1 ? "" : "s"} per day.`;
+    } else if (action === "hold" && styleReserveBlocksDischarge) {
+      reason = `${activePlanningStyleLabel} keeps a higher battery reserve floor at ${batteryReserve}% before discharging.`;
+    }
+
     expectedImportCostPence += expectedImportKwh * importRate;
     expectedExportRevenuePence += expectedExportKwh * exportRate;
     expectedSolarSelfConsumptionKwh += Math.min(loadKwh, solarKwh);
+    chargingBatteryInPreviousSlot = action === "charge_battery";
 
     const confidence = Number(
       clamp(
@@ -848,6 +989,7 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
     "Tariff rates are treated as fixed for the planned horizon.",
     "Forecast confidence is aggregated into heuristic per-slot confidence scores.",
     "Optimization mode adjusts economic action thresholds in the canonical runtime planner.",
+    "Planning style adjusts reserve floor, cycling limit, value weighting, and EV urgency thresholds.",
     "Stored-energy marginal value uses a canonical round-trip efficiency assumption of 90%.",
   ];
 

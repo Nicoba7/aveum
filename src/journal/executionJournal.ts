@@ -8,7 +8,7 @@ import type {
 } from "../application/controlLoopExecution/types";
 import type { RuntimeExecutionPosture } from "../application/controlLoopExecution/executionPolicyTypes";
 import type { PlanFreshnessStatus, ReplanTrigger } from "../application/continuousLoop/controlLoopRunnerTypes";
-import type { OptimizationMode, PlanningConfidenceLevel } from "../domain";
+import type { OptimizationMode, PlanningConfidenceLevel, PlanningStyle } from "../domain";
 import type { PlanningInputCoverage } from "../domain/optimizer";
 import type { CanonicalValueLedger } from "../domain/valueLedger";
 
@@ -29,6 +29,7 @@ export interface ExecutionCycleDecisionSummary {
 }
 
 export interface ExecutionCycleFinancialContext {
+  planningStyle?: PlanningStyle;
   optimizationMode: OptimizationMode;
   decisionsTaken: ExecutionCycleDecisionSummary[];
   valueLedger: CanonicalValueLedger;
@@ -58,6 +59,7 @@ export interface CycleHeartbeatEntry {
  * optimizer has already committed to.
  */
 export interface CycleEconomicSnapshot {
+  planningStyle?: PlanningStyle;
   /** Active optimization objective for this cycle (cost / balanced / carbon / self_consumption). */
   optimizationMode?: OptimizationMode;
   /** Optimizer's confidence in the plan backing this cycle. */

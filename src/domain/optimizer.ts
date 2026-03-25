@@ -1,5 +1,6 @@
 import type { DeviceCapability, DeviceCommand, DeviceKind, TimeWindow } from "./device";
 import type { Forecasts } from "./forecasts";
+import type { PlanningStyle } from "./planningStyle";
 import type { SystemState } from "./system";
 import type { TariffSchedule } from "./tariff";
 
@@ -24,6 +25,8 @@ export type OptimizerDiagnosticSeverity = "info" | "warning" | "critical";
 export interface Constraints {
   /** Optimization mode selected by the customer or product policy. */
   mode: OptimizationMode;
+  /** Canonical planning style selected for this runtime cycle. */
+  planningStyle?: PlanningStyle;
   /** Minimum battery reserve Gridly should preserve. */
   batteryReservePercent?: number;
   /** Upper limit on full battery cycles planned within a day. */
@@ -46,6 +49,16 @@ export interface Constraints {
   minCommandLeadMinutes?: number;
   /** Canonical battery wear cost assumption in pence per kWh discharged. */
   batteryDegradationCostPencePerKwh?: number;
+  /** Weight applied to import-avoidance value when valuing stored energy. */
+  importAvoidanceWeight?: number;
+  /** Weight applied to export value when valuing stored energy and export actions. */
+  exportPreferenceWeight?: number;
+  /** Weight applied to keeping locally-generated energy on site. */
+  selfConsumptionPreferenceWeight?: number;
+  /** Weight applied to EV charging urgency thresholds. */
+  evChargeUrgencyWeight?: number;
+  /** Deadline window in hours where EV urgency ramps faster. */
+  evDeadlineUrgencyHours?: number;
 }
 
 /**

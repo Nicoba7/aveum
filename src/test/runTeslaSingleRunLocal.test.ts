@@ -72,7 +72,7 @@ describe("runTeslaSingleRunLocal", () => {
         TESLA_ACCESS_TOKEN: "token-123",
         TESLA_VEHICLE_ID: "tesla-vehicle-1",
         GRIDLY_NOW_ISO: "2026-03-16T10:05:00.000Z",
-        GRIDLY_OPTIMIZATION_MODE: "cost",
+        GRIDLY_PLANNING_STYLE: "cheapest",
       },
       {
         bootstrapFromSource: () => ({
@@ -98,6 +98,7 @@ describe("runTeslaSingleRunLocal", () => {
               },
               controlLoopResult: {
                 activeDecisions: [],
+                activeOpportunities: [],
                 commandsToIssue: [],
                 skippedDecisions: [],
                 replanRequired: true,
@@ -155,6 +156,8 @@ describe("runTeslaSingleRunLocal", () => {
     expect(summary.controlLoopResultSummary.reasons).toEqual(["NO_ACTIVE_DECISIONS"]);
     expect(summary.executionSummary.total).toBe(0);
     expect(capturedDevices.some((device) => device.deviceId === "tesla-vehicle-1")).toBe(true);
+    expect(summary.planningStyle.activeStyle).toBe("cheapest");
+    expect(summary.planningStyle.source).toBe("env");
     expect(summary.optimizationMode.activeMode).toBe("cost");
     expect(summary.optimizationMode.defaulted).toBe(false);
     expect(capturedMode).toBe("cost");
@@ -196,6 +199,7 @@ describe("runTeslaSingleRunLocal", () => {
             },
             controlLoopResult: {
               activeDecisions: [],
+              activeOpportunities: [],
               commandsToIssue: [],
               skippedDecisions: [],
               replanRequired: true,
@@ -251,6 +255,7 @@ describe("runTeslaSingleRunLocal", () => {
     expect(summary.optimizationMode.activeMode).toBe("balanced");
     expect(summary.optimizationMode.defaulted).toBe(true);
     expect(summary.optimizationMode.requestedMode).toBe("fastest-money");
+    expect(summary.planningStyle?.activeStyle).toBe("balanced");
     expect(capturedMode).toBe("balanced");
   });
 
@@ -282,6 +287,7 @@ describe("runTeslaSingleRunLocal", () => {
             },
             controlLoopResult: {
               activeDecisions: [],
+              activeOpportunities: [],
               commandsToIssue: [],
               skippedDecisions: [],
               replanRequired: true,
@@ -391,6 +397,7 @@ describe("runTeslaSingleRunLocal", () => {
               },
               controlLoopResult: {
                 activeDecisions: [],
+                activeOpportunities: [],
                 commandsToIssue: [],
                 skippedDecisions: [],
                 replanRequired: true,

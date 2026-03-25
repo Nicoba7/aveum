@@ -127,6 +127,8 @@ function DeliveredHeroCard({
   allTimeDelivered,
   allTimeSince,
   allTimeEarned,
+  todayValue,
+  todayTopDevice,
 }: {
   weekTotal: number;
   weekSavings: number;
@@ -135,6 +137,8 @@ function DeliveredHeroCard({
   allTimeDelivered: number;
   allTimeSince: string;
   allTimeEarned?: number;
+  todayValue?: number;
+  todayTopDevice?: "solar" | "battery" | "ev" | "grid" | null;
 }) {
   return (
     <div className="mx-4 mt-5 overflow-hidden rounded-[20px] border border-[#182235] bg-[#0A111D] shadow-[0_14px_34px_rgba(1,7,20,0.32)]">
@@ -148,16 +152,29 @@ function DeliveredHeroCard({
         <div className="mb-2 text-[28px] font-[820] leading-[1.1] tracking-[-0.8px] text-[#F3F7FF]">
           £{weekTotal.toFixed(2)} delivered
         </div>
+        {todayValue != null && todayValue > 0 && (
+          <div className="mb-1 text-[12px] font-semibold tracking-[-0.1px] text-[#4A8C5F]">
+            +£{todayValue.toFixed(2)} today so far
+          </div>
+        )}
+        {todayValue != null && todayValue > 0 && todayTopDevice && (
+          <div className="mb-1 text-[11px] text-[#4E6275]">
+            {todayTopDevice === "solar" && "Solar inverter covered most of today's value."}
+            {todayTopDevice === "battery" && "Home battery provided most of today's value."}
+            {todayTopDevice === "ev" && "EV charger contributed most of today's value."}
+            {todayTopDevice === "grid" && "Smart meter captured most of today's value."}
+          </div>
+        )}
 
         <div className="mb-3 text-[12px] leading-[1.45] text-[#7C8BA2]">
-          Gridly consistently turned solar, storage, EV timing, and tariff shifts into measurable value.
+          Value delivered through solar usage, battery timing, EV charging, and tariff optimisation.
         </div>
 
-        <div className="mb-3 flex items-center gap-2">
+        <div className="mb-3 flex flex-col items-start gap-1">
           <span className="rounded-full border border-[#1B2A40] bg-[#0C1627] px-[7px] py-[2px] text-[10px] font-semibold tracking-[0.3px] text-[#95ABC6]">
-            {freeDays}/7 consistent value days
+            {freeDays}/7 days delivered positive value
           </span>
-          <span className="text-[10px] text-[#697D96]">Reliable delivery across changing conditions.</span>
+          <span className="text-[10px] text-[#697D96]">Consistent performance across the week</span>
         </div>
 
         <div className="flex items-end gap-4 border-t border-[#162235] pt-3 tabular-nums">
@@ -201,17 +218,17 @@ function LatestCycleHeartbeatCard({ latestCycleHeartbeat }: { latestCycleHeartbe
       <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.05, marginBottom: 10 }}>LAST RUN</div>
       {/* Shared canonical heartbeat truth, rendered minimally.
           This is a first step toward a fuller runtime/journal-backed History surface. */}
-      <div style={{ display: "grid", gap: 6 }}>
+      <div style={{ display: "grid", gap: 4 }}>
         {caution && (
-          <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
+          <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.4 }}>
             {/* Presentation label only — canonical caution signal from runtime heartbeat */}
-            Caution: {caution}
+            <span style={{ color: "#4E5E75" }}>Status</span>&nbsp;&nbsp;{caution}
           </div>
         )}
         {objectiveConfidence && (
-          <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
+          <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.4 }}>
             {/* Presentation label only — canonical confidence signal from runtime heartbeat */}
-            Confidence: {objectiveConfidence}
+            <span style={{ color: "#4E5E75" }}>Confidence</span>&nbsp;&nbsp;{objectiveConfidence}
           </div>
         )}
       </div>
@@ -220,10 +237,10 @@ function LatestCycleHeartbeatCard({ latestCycleHeartbeat }: { latestCycleHeartbe
 }
 
 function contributionExplanation(deviceId: HistoryDeviceKey) {
-  if (deviceId === "solar") return "Solar covered more daytime demand and reduced import reliance.";
-  if (deviceId === "battery") return "Stored cheaper energy overnight and released it during peak periods.";
-  if (deviceId === "ev") return "EV charging captured lower overnight tariffs to cut charging cost.";
-  return "Smart meter orchestration captured value from dynamic import and export windows.";
+  if (deviceId === "solar") return "Covered daytime demand and reduced import reliance.";
+  if (deviceId === "battery") return "Stored lower-cost energy and released it during higher-value periods.";
+  if (deviceId === "ev") return "Shifted charging into lower-cost periods.";
+  return "Captured value from dynamic import and export windows.";
 }
 
 function deviceDisplayName(deviceId: HistoryDeviceKey) {
@@ -231,6 +248,24 @@ function deviceDisplayName(deviceId: HistoryDeviceKey) {
   if (deviceId === "battery") return "Home battery";
   if (deviceId === "ev") return "EV charger";
   return "Smart meter";
+}
+
+function normalizeOutcomeStatusLabel(status: string): string {
+  const trimmed = status.trim();
+  if (/^failed$/i.test(trimmed)) {
+    return "Not completed";
+  }
+
+  return trimmed;
+}
+
+function normalizeDeliveredOutcomeStatusLabel(status: string): string {
+  const trimmed = status.trim();
+  if (/^skipped$/i.test(trimmed)) {
+    return "Not executed";
+  }
+
+  return normalizeOutcomeStatusLabel(trimmed);
 }
 
 function ValueContributionSection({
@@ -548,11 +583,23 @@ export default function HistoryTab({
   const latestOutcomeExpectationComparison = buildLatestOutcomeExpectationComparisonReadModel(recentExecutionOutcomes);
   const recentOutcomeCounters = buildRecentOutcomeCountersReadModel(recentExecutionOutcomes);
 
+  // Deterministic today top contributor — derived from live-scaled per-device fields on today's HistoryDay entry.
+  // No inference: whichever of solar/battery/ev/grid has the highest value wins.
+  const todayDay = currentWeekHistory[currentWeekHistory.length - 1];
+  const todayDeviceCandidates: { key: "solar" | "battery" | "ev" | "grid"; value: number }[] = [
+    { key: "solar", value: todayDay?.solar ?? 0 },
+    { key: "battery", value: todayDay?.battery ?? 0 },
+    { key: "ev", value: todayDay?.ev ?? 0 },
+    { key: "grid", value: todayDay?.grid ?? 0 },
+  ];
+  const todayTopContributor = todayDeviceCandidates.reduce((best, c) => (c.value > best.value ? c : best), { key: "solar" as const, value: -1 });
+  const todayTopDevice = todayTopContributor.value > 0 ? todayTopContributor.key : null;
+
   const topContributorName = viewModel.topDevice ? deviceDisplayName(viewModel.topDevice.id) : "Gridly";
   const weeklyNarrative =
     viewModel.weekEarnings > 0
-      ? `${topContributorName} remained a strong value driver while export and overnight charging windows added consistent gains.`
-      : `${topContributorName} remained the strongest value driver while Gridly shifted demand into cheaper windows.`;
+      ? `${topContributorName} was the primary value source. Export and overnight charging added further gains.`
+      : `${topContributorName} was the primary value source. Demand was shifted into lower-cost windows where possible.`;
 
   const exportWeeklyReport = () => {
     const report = {
@@ -597,6 +644,7 @@ export default function HistoryTab({
 
   return (
     <div style={{ background: "#060A12", minHeight: "100vh", paddingBottom: 40 }}>
+      {/* ── 1. VALUE DELIVERY (primary content) ── */}
       <DeliveredHeroCard
         weekTotal={viewModel.weekTotal}
         weekSavings={viewModel.weekSavings}
@@ -605,138 +653,16 @@ export default function HistoryTab({
         allTimeDelivered={viewModel.allTimeDelivered}
         allTimeSince={viewModel.allTimeSince}
         allTimeEarned={viewModel.allTimeEarned}
+        todayValue={viewModel.values[viewModel.values.length - 1]}
+        todayTopDevice={todayTopDevice}
       />
-
-      <LatestCycleHeartbeatCard latestCycleHeartbeat={latestCycleHeartbeat} />
-
-      {recentCycleItems.length > 0 && (
-        <div style={{ margin: "12px 16px 0", background: "#0B1120", borderRadius: 18, border: "1px solid #152238", padding: "14px 16px" }}>
-          <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.05, marginBottom: 10 }}>RECENT RUNS</div>
-          {/* Shared canonical heartbeat truth, rendered as a minimal recent-cycles strip.
-              This intentionally bridges toward a fuller runtime/journal-backed History surface. */}
-          <div style={{ display: "grid", gap: 8 }}>
-            {recentCycleItems.map((item) => (
-              <div key={item.id} style={{ borderTop: "1px solid #111A2B", paddingTop: 8 }}>
-                <div style={{ fontSize: 10.5, color: "#667A93", marginBottom: 3 }}>{item.recordedAtLabel}</div>
-                {item.nextCycleExecutionCaution && (
-                  <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                    Caution: {item.nextCycleExecutionCaution}
-                  </div>
-                )}
-                {item.householdObjectiveConfidence && (
-                  <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                    Confidence: {item.householdObjectiveConfidence}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {recentExecutionOutcomeItems.length > 0 && (
-        <div style={{ margin: "12px 16px 0", background: "#0B1120", borderRadius: 18, border: "1px solid #152238", padding: "14px 16px" }}>
-          <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.05, marginBottom: 10 }}>RECENT ACTIONS</div>
-          {latestExecutionOutcomeDetail && (
-            <div style={{ marginBottom: 10, background: "#0A111D", border: "1px solid #111A2B", borderRadius: 12, padding: "10px 12px" }}>
-              {/* Canonical latest execution outcome detail from journal truth only.
-                  Intentionally minimal as a bridge toward a fuller accountability-backed History surface. */}
-              {/* Presentation labels only. Canonical meaning from journal truth (commandLabel, outcomeStatus, executionConfidence, telemetryCoherence). */}
-              <div style={{ fontSize: 10, color: "#667A93", marginBottom: 4 }}>
-                LAST ACTION · {latestExecutionOutcomeDetail.recordedAtLabel} · {latestExecutionOutcomeDetail.targetDeviceId}
-              </div>
-              <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>Action: {latestExecutionOutcomeDetail.commandLabel}</div>
-              <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>Result: {latestExecutionOutcomeDetail.outcomeStatus}</div>
-              {latestExecutionOutcomeDetail.executionConfidence && (
-                <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                  Confidence: {latestExecutionOutcomeDetail.executionConfidence}
-                </div>
-              )}
-              {latestExecutionOutcomeDetail.executionEvidence && (
-                <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                  Evidence: {latestExecutionOutcomeDetail.executionEvidence}
-                </div>
-              )}
-            </div>
-          )}
-
-          {latestOutcomeExpectationComparison && (
-            <div style={{ marginBottom: 10, background: "#0A111D", border: "1px solid #111A2B", borderRadius: 12, padding: "10px 12px" }}>
-              {/* Expected-vs-actual view backed only by canonical runtime/journal truth.
-                  Intentionally minimal and a bridge toward fuller expected-vs-realized accountability. */}
-              {/* Presentation labels only. Canonical meaning from journal truth (expectedCommandLabel, actualOutcomeStatus, actualExecutionConfidence, actualExecutionEvidence). */}
-              <div style={{ fontSize: 10, color: "#667A93", marginBottom: 4 }}>
-                PLANNED vs DELIVERED · {latestOutcomeExpectationComparison.recordedAtLabel}
-              </div>
-              <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                Planned: {latestOutcomeExpectationComparison.expectedCommandLabel} on {latestOutcomeExpectationComparison.expectedTargetDeviceId}
-              </div>
-              <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                Delivered: {latestOutcomeExpectationComparison.actualOutcomeStatus}
-              </div>
-              {latestOutcomeExpectationComparison.actualExecutionConfidence && (
-                <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                  Confidence: {latestOutcomeExpectationComparison.actualExecutionConfidence}
-                </div>
-              )}
-              {latestOutcomeExpectationComparison.actualExecutionEvidence && (
-                <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                  Evidence: {latestOutcomeExpectationComparison.actualExecutionEvidence}
-                </div>
-              )}
-            </div>
-          )}
-          {/* Counters derived only from canonical recent execution journal truth.
-              This is intentionally minimal and acts as a bridge to a fuller accountability-backed History surface. */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 8, marginBottom: 10 }}>
-            <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#DCE6F5" }}>Issued: {recentOutcomeCounters.issued}</div>
-            </div>
-            <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#DCE6F5" }}>Skipped: {recentOutcomeCounters.skipped}</div>
-            </div>
-            <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#DCE6F5" }}>Failed: {recentOutcomeCounters.failed}</div>
-            </div>
-            <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#DCE6F5" }}>Confirmed: {recentOutcomeCounters.evidenceConfirmed}</div>
-            </div>
-            <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#DCE6F5" }}>Uncertain: {recentOutcomeCounters.evidenceUncertain}</div>
-            </div>
-          </div>
-          {/* Canonical execution/journal truth only, rendered minimally.
-              This is an intentionally small bridge toward a fuller journal-backed History surface. */}
-          <div style={{ display: "grid", gap: 8 }}>
-            {recentExecutionOutcomeItems.map((item) => (
-              <div key={item.id} style={{ borderTop: "1px solid #111A2B", paddingTop: 8 }}>
-                <div style={{ fontSize: 10.5, color: "#667A93", marginBottom: 3 }}>
-                  {item.recordedAtLabel} · {item.targetDeviceId}
-                </div>
-                <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                  Result: {item.status}
-                </div>
-                {item.executionConfidence && (
-                  <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                    Confidence: {item.executionConfidence}
-                  </div>
-                )}
-                {item.telemetryCoherence && (
-                  <div style={{ fontSize: 11.5, color: "#8EA0B8", lineHeight: 1.45 }}>
-                    Evidence: {item.telemetryCoherence}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       <ValueContributionSection
         deviceBreakdown={viewModel.deviceBreakdown}
         weekTotal={viewModel.weekTotal}
       />
 
+      {/* ── 2. SUPPORTING INSIGHTS ── */}
       <KeyMomentsSection moments={viewModel.smartMoments} />
 
       <WeekAtGlanceSection
@@ -754,6 +680,143 @@ export default function HistoryTab({
         selectedDayExplanations={selectedDayExplanations}
       />
 
+      {/* ── 3. OPERATIONAL DETAILS ── */}
+      <LatestCycleHeartbeatCard latestCycleHeartbeat={latestCycleHeartbeat} />
+
+      {recentCycleItems.length > 0 && (
+        <div style={{ margin: "12px 16px 0", background: "#0B1120", borderRadius: 18, border: "1px solid #152238", padding: "14px 16px" }}>
+          <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.05, marginBottom: 10 }}>RECENT RUNS</div>
+          {/* Shared canonical heartbeat truth, rendered as a minimal recent-cycles strip.
+              This intentionally bridges toward a fuller runtime/journal-backed History surface. */}
+          <div style={{ display: "grid", gap: 7 }}>
+            {recentCycleItems.map((item) => (
+              <div key={item.id} style={{ borderTop: "1px solid #111A2B", paddingTop: 7, display: "flex", alignItems: "baseline", gap: 10 }}>
+                <div style={{ fontSize: 10.5, color: "#4E5E75", flexShrink: 0, minWidth: 36 }}>{item.recordedAtLabel}</div>
+                <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.35 }}>
+                  {[item.nextCycleExecutionCaution && `Caution: ${item.nextCycleExecutionCaution}`, item.householdObjectiveConfidence && `Confidence: ${item.householdObjectiveConfidence}`].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {recentExecutionOutcomeItems.length > 0 && (
+        <div style={{ margin: "12px 16px 0", background: "#0B1120", borderRadius: 18, border: "1px solid #152238", padding: "14px 16px" }}>
+          <div style={{ fontSize: 10, color: "#4E5E75", fontWeight: 700, letterSpacing: 1.05, marginBottom: 10 }}>RECENT ACTIONS</div>
+          {latestExecutionOutcomeDetail && (
+            <div style={{ marginBottom: 10, background: "#0A111D", border: "1px solid #111A2B", borderRadius: 12, padding: "10px 12px" }}>
+              {/* Canonical latest execution outcome detail from journal truth only.
+                  Intentionally minimal as a bridge toward a fuller accountability-backed History surface. */}
+              {/* Presentation labels only. Canonical meaning from journal truth (commandLabel, outcomeStatus, executionConfidence, telemetryCoherence). */}
+              <div style={{ fontSize: 9.5, color: "#4E5E75", fontWeight: 600, letterSpacing: 0.5, marginBottom: 5 }}>
+                LAST ACTION
+              </div>
+              <div style={{ fontSize: 10, color: "#667A93", marginBottom: 6 }}>
+                {latestExecutionOutcomeDetail.recordedAtLabel} · {latestExecutionOutcomeDetail.targetDeviceId}
+              </div>
+              <div style={{ display: "grid", gap: 3 }}>
+                <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.4 }}>
+                  <span style={{ color: "#4E5E75" }}>Action</span>&nbsp;&nbsp;{latestExecutionOutcomeDetail.commandLabel}
+                </div>
+                <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.4 }}>
+                  <span style={{ color: "#4E5E75" }}>Result</span>&nbsp;&nbsp;{normalizeOutcomeStatusLabel(latestExecutionOutcomeDetail.outcomeStatus)}
+                </div>
+                {latestExecutionOutcomeDetail.executionConfidence && (
+                  <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.4 }}>
+                    <span style={{ color: "#4E5E75" }}>Confidence</span>&nbsp;&nbsp;{latestExecutionOutcomeDetail.executionConfidence}
+                  </div>
+                )}
+                {latestExecutionOutcomeDetail.executionEvidence && (
+                  <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.4 }}>
+                    <span style={{ color: "#4E5E75" }}>Evidence</span>&nbsp;&nbsp;{latestExecutionOutcomeDetail.executionEvidence}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {latestOutcomeExpectationComparison && (
+            <div style={{ marginBottom: 10, background: "#0A111D", border: "1px solid #111A2B", borderRadius: 12, padding: "10px 12px" }}>
+              {/* Expected-vs-actual view backed only by canonical runtime/journal truth.
+                  Intentionally minimal and a bridge toward fuller expected-vs-realized accountability. */}
+              {/* Presentation labels only. Canonical meaning from journal truth (expectedCommandLabel, actualOutcomeStatus, actualExecutionConfidence, actualExecutionEvidence). */}
+              <div style={{ fontSize: 10, color: "#667A93", marginBottom: 8 }}>
+                {latestOutcomeExpectationComparison.recordedAtLabel}
+              </div>
+              <div style={{ display: "grid", gap: 6 }}>
+                <div style={{ paddingBottom: 6, borderBottom: "1px solid #152030" }}>
+                  <div style={{ fontSize: 9.5, color: "#4E5E75", fontWeight: 600, letterSpacing: 0.5, marginBottom: 3 }}>PLANNED</div>
+                  <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.4 }}>
+                    {latestOutcomeExpectationComparison.expectedCommandLabel} · {latestOutcomeExpectationComparison.expectedTargetDeviceId}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 9.5, color: "#4E5E75", fontWeight: 600, letterSpacing: 0.5, marginBottom: 3 }}>DELIVERED</div>
+                  <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.4 }}>
+                    {normalizeDeliveredOutcomeStatusLabel(latestOutcomeExpectationComparison.actualOutcomeStatus)}
+                  </div>
+                  {latestOutcomeExpectationComparison.actualExecutionConfidence && (
+                    <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.4 }}>
+                      <span style={{ color: "#4E5E75" }}>Confidence</span>&nbsp;&nbsp;{latestOutcomeExpectationComparison.actualExecutionConfidence}
+                    </div>
+                  )}
+                  {latestOutcomeExpectationComparison.actualExecutionEvidence && (
+                    <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.4 }}>
+                      <span style={{ color: "#4E5E75" }}>Evidence</span>&nbsp;&nbsp;{latestOutcomeExpectationComparison.actualExecutionEvidence}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          <div style={{ fontSize: 10.5, color: "#70839B", lineHeight: 1.45, marginBottom: 8 }}>
+            Some actions are not executed when conditions or constraints change.
+          </div>
+          {/* Counters derived only from canonical recent execution journal truth.
+              This is intentionally minimal and acts as a bridge to a fuller accountability-backed History surface. */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 8, marginBottom: 10 }}>
+            <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#DCE6F5", whiteSpace: "nowrap" }}>Issued: {recentOutcomeCounters.issued}</div>
+            </div>
+            <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
+              <div
+                title="Skipped — conditions not met"
+                aria-label="Skipped — conditions not met"
+                style={{ fontSize: 11, fontWeight: 700, color: "#DCE6F5", whiteSpace: "nowrap" }}
+              >
+                Skipped: {recentOutcomeCounters.skipped}
+              </div>
+            </div>
+            <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#DCE6F5", whiteSpace: "nowrap" }}>Not run: {recentOutcomeCounters.failed}</div>
+            </div>
+            <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#DCE6F5", whiteSpace: "nowrap" }}>Confirmed: {recentOutcomeCounters.evidenceConfirmed}</div>
+            </div>
+            <div style={{ background: "#0A111D", border: "1px solid #111A2B", borderRadius: 10, padding: "8px 6px", textAlign: "center" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#DCE6F5", whiteSpace: "nowrap" }}>Uncertain: {recentOutcomeCounters.evidenceUncertain}</div>
+            </div>
+          </div>
+          {/* Canonical execution/journal truth only, rendered minimally.
+              This is an intentionally small bridge toward a fuller journal-backed History surface. */}
+          <div style={{ display: "grid", gap: 8 }}>
+            {recentExecutionOutcomeItems.map((item) => (
+              <div key={item.id} style={{ borderTop: "1px solid #111A2B", paddingTop: 7, display: "flex", alignItems: "baseline", gap: 10 }}>
+                <div style={{ fontSize: 10, color: "#4E5E75", flexShrink: 0, minWidth: 36 }}>{item.recordedAtLabel}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 10, color: "#4E5E75", marginBottom: 1 }}>{item.targetDeviceId}</div>
+                  <div style={{ fontSize: 11, color: "#8EA0B8", lineHeight: 1.35 }}>
+                    {[`Result: ${normalizeOutcomeStatusLabel(item.status)}`, item.executionConfidence && `Confidence: ${item.executionConfidence}`, item.telemetryCoherence && `Evidence: ${item.telemetryCoherence}`].filter(Boolean).join(" · ")}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── 4. DETAILED HISTORY ── */}
       <div style={{ margin: "24px 0 0" }}>
         <div style={{ borderTop: "1px solid #0A1020" }}>
           <CollapsibleSection label="Detailed history">

@@ -28,6 +28,16 @@ export interface BuildMarginalStoredEnergyValueInput {
   mode: OptimizationMode;
   roundTripEfficiency?: number;
   batteryDegradationCostPencePerKwh?: number;
+  importAvoidanceWeight?: number;
+  exportPreferenceWeight?: number;
+}
+
+function clampWeight(input: number | undefined, fallback: number): number {
+  if (input === undefined || !Number.isFinite(input)) {
+    return fallback;
+  }
+
+  return Math.max(0.25, Math.min(2, input));
 }
 
 function clampEfficiency(input: number | undefined): number {
@@ -63,12 +73,13 @@ export function buildMarginalStoredEnergyValueProfile(
 ): MarginalStoredEnergyValueResult {
   const roundTripEfficiency = clampEfficiency(input.roundTripEfficiency);
   const batteryDegradationCostPencePerKwh = clampDegradationCost(input.batteryDegradationCostPencePerKwh);
-  const exportWeight = exportModeWeight(input.mode);
+  const importWeight = clampWeight(input.importAvoidanceWeight, 1);
+  const exportWeight = exportModeWeight(input.mode) * clampWeight(input.exportPreferenceWeight, 1);
   const points: MarginalStoredEnergyValuePoint[] = input.importRates.map((importRate, slotIndex) => {
     const importPencePerKwh = Math.max(0, importRate.unitRatePencePerKwh);
     const exportPencePerKwh = Math.max(0, input.exportRates?.[slotIndex]?.unitRatePencePerKwh ?? 0);
 
-    const importAvoidancePencePerKwh = Number((importPencePerKwh * roundTripEfficiency).toFixed(3));
+    const importAvoidancePencePerKwh = Number((importPencePerKwh * roundTripEfficiency * importWeight).toFixed(3));
     const exportOpportunityPencePerKwh = Number((exportPencePerKwh * roundTripEfficiency).toFixed(3));
     const grossStoredEnergyValuePencePerKwh = Number(
       Math.max(importAvoidancePencePerKwh, exportOpportunityPencePerKwh * exportWeight).toFixed(3),
