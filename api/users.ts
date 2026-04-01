@@ -13,11 +13,6 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { Redis } from "@upstash/redis";
 import * as crypto from "node:crypto";
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
-
 const KV_KEY = "aveum:users";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -64,12 +59,62 @@ interface UpdateRequestBody extends UpdateableFields {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-async function readAllUsers(): Promise<StoredUser[]> {
+function normalizeEnvValue(raw: string | undefined): string {
+  const trimmed = raw?.trim() ?? "";
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function createRedisClient(): { client: Redis } | { error: string } {
+  const rawUrl = process.env.UPSTASH_REDIS_REST_URL;
+  const rawToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const url = normalizeEnvValue(rawUrl);
+  const token = normalizeEnvValue(rawToken);
+
+  console.log("Redis config diagnostics", {
+    hasUpstashRedisRestUrl: Boolean(rawUrl),
+    hasUpstashRedisRestToken: Boolean(rawToken),
+    trimmedUrlLength: url.length,
+    trimmedUrlStartsWithHttps: url.startsWith("https://"),
+    trimmedUrlPreview: url.slice(0, 30),
+    tokenLength: token.length,
+  });
+
+  if (!url) {
+    return { error: "Missing UPSTASH_REDIS_REST_URL" };
+  }
+  if (!token) {
+    return { error: "Missing UPSTASH_REDIS_REST_TOKEN" };
+  }
+  if (!url.startsWith("https://")) {
+    return { error: "UPSTASH_REDIS_REST_URL must start with https://" };
+  }
+
+  try {
+    return {
+      client: new Redis({
+        url,
+        token,
+      }),
+    };
+  } catch (err: unknown) {
+    return {
+      error: `Failed to initialize Redis client: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+async function readAllUsers(redis: Redis): Promise<StoredUser[]> {
   const raw = await redis.lrange<string>(KV_KEY, 0, -1);
   return raw.map((entry) => JSON.parse(entry) as StoredUser);
 }
 
-async function writeAllUsers(users: StoredUser[]): Promise<void> {
+async function writeAllUsers(redis: Redis, users: StoredUser[]): Promise<void> {
   const pipeline = redis.pipeline();
   pipeline.del(KV_KEY);
   for (const user of [...users].reverse()) {
@@ -87,6 +132,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === "OPTIONS") return res.status(204).end();
 
+  const redisResult = createRedisClient();
+  if ("error" in redisResult) {
+    return res.status(500).json({ error: redisResult.error });
+  }
+
+  const { client: redis } = redisResult;
+
   const action = req.query.action as string | undefined;
 
   // ── POST /api/users?action=waitlist ────────────────────────────────────────
@@ -101,11 +153,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await redis.lpush("aveum:waitlist", normalizedEmail);
       return res.status(200).json({ success: true });
     } catch (err: unknown) {
+      const details = err instanceof Error ? err.message : String(err);
       console.error("Failed to write waitlist email to Redis", {
         email: normalizedEmail,
         error: err,
+        details,
       });
-      return res.status(500).json({ error: "Failed to save waitlist email" });
+      return res.status(500).json({ error: "Failed to save waitlist email", details });
     }
   }
 
@@ -161,7 +215,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: "userId query param is required" });
     }
     try {
-      const users = await readAllUsers();
+      const users = await readAllUsers(redis);
       const user = users.find((u) => u.userId === userId.trim());
       if (!user) return res.status(404).json({ error: "User not found" });
       const { ohmePassword: _p, octopusApiKey: _k, ...safe } = user as any;
@@ -200,11 +254,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: "No valid fields to update" });
 
     try {
-      const users = await readAllUsers();
+      const users = await readAllUsers(redis);
       const idx = users.findIndex((u) => u.userId === body.userId.trim());
       if (idx === -1) return res.status(404).json({ error: "User not found" });
       users[idx] = { ...users[idx], ...updates } as StoredUser;
-      await writeAllUsers(users);
+      await writeAllUsers(redis, users);
       return res.status(200).json({ success: true });
     } catch (err: unknown) {
       return res.status(500).json({

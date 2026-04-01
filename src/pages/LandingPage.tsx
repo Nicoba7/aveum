@@ -224,16 +224,19 @@ export default function LandingPage() {
       <section style={S.hero}>
         <h1 style={S.headline}>Stop overpaying for electricity.</h1>
         <p style={S.subheadline}>
-          Aveum automatically optimises your home energy and sends you a daily savings report.
-          Works with Octopus Agile, any EV charger, battery, or solar inverter.
+          Aveum runs your home at the cheapest times — automatically.
+        </p>
+        <p style={S.subheadline}>
+          Works with Octopus Agile. EV, battery, or just one device. No solar required.
         </p>
         <a href="/onboarding" style={S.ctaButton}>Join the beta — it's free</a>
+        <p style={S.proofText}>No setup. No technical knowledge. You stay in control.</p>
       </section>
 
       {/* Proof bar */}
       <div style={S.proofBar}>
         <p style={S.proofText}>
-          Proven across 11 real Octopus Agile market scenarios. Beats set-and-forget on cost every time.
+          We've already saved users money overnight by using cheaper electricity hours.
         </p>
       </div>
 
@@ -242,15 +245,15 @@ export default function LandingPage() {
         <div style={S.sectionTitle}>How it works</div>
         <div style={S.step}>
           <div style={S.stepNum}>1</div>
-          <span style={S.stepText}>Connect your devices — takes 2 minutes</span>
+          <span style={S.stepText}>Connect your device — takes 2 minutes</span>
         </div>
         <div style={S.step}>
           <div style={S.stepNum}>2</div>
-          <span style={S.stepText}>Aveum optimises every night at 1am using live Agile prices</span>
+          <span style={S.stepText}>We run your home when electricity is cheapest</span>
         </div>
         <div style={S.step}>
           <div style={S.stepNum}>3</div>
-          <span style={S.stepText}>Wake up to your morning savings report</span>
+          <span style={S.stepText}>Wake up to money saved</span>
         </div>
       </section>
 
