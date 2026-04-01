@@ -52,7 +52,7 @@ export default function Settings() {
       setLoading(false);
       return;
     }
-    fetch(`/api/user?userId=${encodeURIComponent(userId)}`)
+    fetch(`/api/users?userId=${encodeURIComponent(userId)}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.user) setSettings(data.user);
@@ -68,7 +68,7 @@ export default function Settings() {
     setSaved(false);
 
     try {
-      const res = await fetch("/api/user", {
+      const res = await fetch("/api/users", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
