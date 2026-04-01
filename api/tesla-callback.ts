@@ -47,14 +47,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const vehicleData = await vehiclesRes.json();
     const vehicleId = vehicleData?.response?.[0]?.id_s ?? "";
 
-    // Redirect to dashboard with token in URL params
-    // In production: store in secure session/cookie instead
-    const params = new URLSearchParams({
-      tesla_connected: "true",
-      tesla_token: tokens.access_token,
-      tesla_vehicle_id: vehicleId,
-    });
+    // Store tokens in HTTP-only cookies — never expose in URL parameters.
+    // Tokens in URLs leak into server logs, browser history, and Referer headers.
+    const cookieOpts = "Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600";
+    res.setHeader("Set-Cookie", [
+      `tesla_token=${tokens.access_token}; ${cookieOpts}`,
+      `tesla_vehicle_id=${vehicleId}; ${cookieOpts}`,
+    ]);
 
+    const params = new URLSearchParams({ tesla_connected: "true" });
     res.redirect(`/dashboard?${params.toString()}`);
   } catch (err: any) {
     res.redirect(`/?error=${encodeURIComponent(err.message)}`);
