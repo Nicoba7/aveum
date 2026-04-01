@@ -352,7 +352,7 @@ function EVForm({ creds, setCreds }: { creds: any; setCreds: any }) {
             Tap below to log in with your Tesla account. You'll be redirected back automatically.
           </div>
           <button
-            onClick={() => window.location.href = "/api/tesla-auth"}
+            onClick={() => window.location.href = "/api/tesla?action=auth"}
             style={{ width: "100%", background: "#38BDF8", border: "none", borderRadius: 10, padding: "12px 16px", color: "#030712", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
           >
             Connect Tesla Account
@@ -445,7 +445,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const handleComplete = async () => {
     setRegistering(true);
     try {
-      const res = await fetch("/api/register", {
+      const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
