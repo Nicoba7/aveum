@@ -4,7 +4,7 @@ import type { DeviceAdapterExecutionContext } from "../deviceAdapter";
 import { BaseRealDeviceAdapter, type AdapterOperation, type CanonicalAdapterCommandResult, type CanonicalAdapterError } from "../realDeviceAdapterContract";
 import { IndraTransportError, type IndraApiClient, type IndraCommandResult, type IndraStatusPayload } from "./IndraApiClient";
 
-export type IndraCapability = "read_power" | "schedule_window";
+export type IndraCapability = "read_power" | "schedule_window" | "vehicle_to_home";
 
 export interface IndraAdapterConfig {
   deviceId: string;
@@ -16,7 +16,7 @@ export interface IndraAdapterConfig {
 
 export class IndraAdapter extends BaseRealDeviceAdapter<IndraCommandResult, IndraStatusPayload, IndraTransportError> {
   readonly adapterId = "indra-adapter.v1";
-  readonly capabilities: IndraCapability[] = ["read_power", "schedule_window"];
+  readonly capabilities: IndraCapability[] = ["read_power", "schedule_window", "vehicle_to_home"];
 
   private readonly deviceId: string;
   private readonly email: string;

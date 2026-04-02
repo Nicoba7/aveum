@@ -74,6 +74,8 @@ function mapDecisionToHeadline(decision: string): string {
       return "Charging battery";
     case "discharge_battery":
       return "Powering home from battery";
+    case "discharge_ev_to_home":
+      return "EV powering your home";
     case "charge_ev":
     case "start_charging":
       return "Charging EV";

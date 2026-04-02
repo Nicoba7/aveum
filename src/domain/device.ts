@@ -56,7 +56,8 @@ export type DeviceCapability =
   | "set_target_soc"
   | "set_reserve_soc"
   | "set_power_limit"
-  | "schedule_window";
+  | "schedule_window"
+  | "vehicle_to_home";
 
 /**
  * Generic time window used for planned control actions.

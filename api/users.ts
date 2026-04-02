@@ -26,10 +26,21 @@ interface RegisterRequestBody {
   region?: string;
   optimizationMode?: string;
   devices?: string[];
+  deviceConfigs?: UserDeviceConfig[];
   ohmeEmail?: string;
   ohmePassword?: string;
   departureTime?: string;
   targetSocPercent?: number;
+  v2hCapable?: boolean;
+  v2hMinSocPercent?: number;
+}
+
+export interface UserDeviceConfig {
+  deviceId: string;
+  kind: "battery" | "ev_charger" | "solar_inverter" | "smart_meter" | "gateway";
+  brand?: string;
+  v2hCapable?: boolean;
+  v2hMinSocPercent?: number;
 }
 
 export interface StoredUser {
@@ -42,20 +53,27 @@ export interface StoredUser {
   region: string;
   optimizationMode: string;
   devices: string[];
+  deviceConfigs?: UserDeviceConfig[];
   ohmeEmail?: string;
   ohmePassword?: string;
   departureTime?: string;
   targetSocPercent?: number;
+  v2hCapable?: boolean;
+  v2hMinSocPercent?: number;
 }
 
 interface UpdateableFields {
   departureTime?: string;
-  targetChargePct?: number;
+  targetSocPercent?: number;
   notifyEmail?: string;
+  v2hCapable?: boolean;
+  v2hMinSocPercent?: number;
+  deviceConfigs?: UserDeviceConfig[];
 }
 
 interface UpdateRequestBody extends UpdateableFields {
   userId: string;
+  targetChargePct?: number;
 }
 
 interface OctopusRateResult {
@@ -132,6 +150,25 @@ async function writeAllUsers(redis: Redis, users: StoredUser[]): Promise<void> {
     pipeline.lpush(KV_KEY, JSON.stringify(user));
   }
   await pipeline.exec();
+}
+
+function normalizeDeviceConfigs(deviceConfigs: UserDeviceConfig[] | undefined): UserDeviceConfig[] | undefined {
+  if (!Array.isArray(deviceConfigs) || deviceConfigs.length === 0) {
+    return undefined;
+  }
+
+  return deviceConfigs
+    .filter((config) => config && typeof config.deviceId === "string" && typeof config.kind === "string")
+    .map((config) => ({
+      deviceId: config.deviceId.trim(),
+      kind: config.kind,
+      ...(config.brand?.trim() && { brand: config.brand.trim() }),
+      ...(config.v2hCapable !== undefined && { v2hCapable: Boolean(config.v2hCapable) }),
+      ...(config.v2hMinSocPercent !== undefined && {
+        v2hMinSocPercent: Number(config.v2hMinSocPercent),
+      }),
+    }))
+    .filter((config) => config.deviceId.length > 0);
 }
 
 function getLondonDateTimeParts(date: Date): { date: string; hour: number } {
@@ -377,6 +414,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!body?.userName?.trim()) return res.status(400).json({ error: "userName is required" });
     if (!body?.notifyEmail?.trim()) return res.status(400).json({ error: "notifyEmail is required" });
 
+    const normalizedDeviceConfigs = normalizeDeviceConfigs(body.deviceConfigs);
+    const targetSocPercent =
+      body.targetSocPercent != null ? Number(body.targetSocPercent) : undefined;
+    const v2hMinSocPercent =
+      body.v2hMinSocPercent != null ? Number(body.v2hMinSocPercent) : undefined;
+
+    if (
+      targetSocPercent != null &&
+      (!Number.isFinite(targetSocPercent) || targetSocPercent < 20 || targetSocPercent > 100)
+    ) {
+      return res.status(400).json({ error: "targetSocPercent must be 20–100" });
+    }
+    if (
+      v2hMinSocPercent != null &&
+      (!Number.isFinite(v2hMinSocPercent) || v2hMinSocPercent < 20 || v2hMinSocPercent > 60)
+    ) {
+      return res.status(400).json({ error: "v2hMinSocPercent must be 20–60" });
+    }
+
     const userId = crypto.randomUUID();
     const newUser: StoredUser = {
       userId,
@@ -388,10 +444,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       region: body.region?.trim() || "C",
       optimizationMode: body.optimizationMode?.trim() || "balanced",
       devices: Array.isArray(body.devices) ? body.devices : [],
+      ...(normalizedDeviceConfigs?.length ? { deviceConfigs: normalizedDeviceConfigs } : {}),
       ...(body.ohmeEmail?.trim() && { ohmeEmail: body.ohmeEmail.trim() }),
       ...(body.ohmePassword?.trim() && { ohmePassword: body.ohmePassword.trim() }),
       ...(body.departureTime?.trim() && { departureTime: body.departureTime.trim() }),
-      ...(body.targetSocPercent != null && { targetSocPercent: Number(body.targetSocPercent) }),
+      ...(targetSocPercent != null && { targetSocPercent }),
+      ...(body.v2hCapable !== undefined && { v2hCapable: Boolean(body.v2hCapable) }),
+      ...(v2hMinSocPercent != null && { v2hMinSocPercent }),
     };
 
     try {
@@ -436,7 +495,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const user = users.find((u) => u.userId === userId.trim());
       if (!user) return res.status(404).json({ error: "User not found" });
       const { ohmePassword: _p, octopusApiKey: _k, ...safe } = user as any;
-      return res.status(200).json({ user: safe });
+      return res.status(200).json({
+        user: {
+          ...safe,
+          targetChargePct: safe.targetSocPercent,
+        },
+      });
     } catch (err: unknown) {
       return res.status(500).json({
         error: `Failed to read user: ${err instanceof Error ? err.message : String(err)}`,
@@ -450,22 +514,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!body?.userId?.trim()) return res.status(400).json({ error: "userId is required" });
 
     const updates: UpdateableFields = {};
+    const normalizedDeviceConfigs = normalizeDeviceConfigs(body.deviceConfigs);
     if (body.departureTime !== undefined) {
       const t = String(body.departureTime).trim();
       if (!/^\d{1,2}:\d{2}$/.test(t)) return res.status(400).json({ error: "departureTime must be HH:MM" });
       updates.departureTime = t;
     }
-    if (body.targetChargePct !== undefined) {
-      const pct = Number(body.targetChargePct);
+    if (body.targetSocPercent !== undefined || body.targetChargePct !== undefined) {
+      const pct = Number(body.targetSocPercent ?? body.targetChargePct);
       if (!Number.isFinite(pct) || pct < 20 || pct > 100)
-        return res.status(400).json({ error: "targetChargePct must be 20–100" });
-      updates.targetChargePct = pct;
+        return res.status(400).json({ error: "targetSocPercent must be 20–100" });
+      updates.targetSocPercent = pct;
     }
     if (body.notifyEmail !== undefined) {
       const email = String(body.notifyEmail).trim();
       if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
         return res.status(400).json({ error: "notifyEmail is not a valid email" });
       updates.notifyEmail = email || undefined;
+    }
+    if (body.v2hCapable !== undefined) {
+      updates.v2hCapable = Boolean(body.v2hCapable);
+    }
+    if (body.v2hMinSocPercent !== undefined) {
+      const pct = Number(body.v2hMinSocPercent);
+      if (!Number.isFinite(pct) || pct < 20 || pct > 60)
+        return res.status(400).json({ error: "v2hMinSocPercent must be 20–60" });
+      updates.v2hMinSocPercent = pct;
+    }
+    if (body.deviceConfigs !== undefined) {
+      updates.deviceConfigs = normalizedDeviceConfigs ?? [];
     }
     if (Object.keys(updates).length === 0)
       return res.status(400).json({ error: "No valid fields to update" });

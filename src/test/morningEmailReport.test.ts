@@ -17,6 +17,7 @@ function makeReport(overrides: Partial<DailySavingsReport> = {}): DailySavingsRe
     earnedFromExportPence: 44,
     cheapestSlotUsed: { time: "01:00", pricePencePerKwh: 2.3 },
     batteryDischargedAt: { time: "17:00", pricePencePerKwh: 34.0 },
+    v2hDischargeEvent: null,
     evChargedAt: { time: "07:00", pricePencePerKwh: 7.2 },
     oneLiner:
       "Aveum charged your battery at 2.3p and discharged at 34.0p, saving you £2.38 today.",
@@ -66,6 +67,22 @@ describe("buildMorningEmailContent", () => {
   it("plain text contains discharge peak bullet", () => {
     const { text } = buildMorningEmailContent(makeReport(), DATE_ISO);
     expect(text).toContain("34.0p/kWh");
+  });
+
+  it("plain text contains V2H bullet when a V2H event occurred", () => {
+    const { text } = buildMorningEmailContent(
+      makeReport({
+        batteryDischargedAt: null,
+        v2hDischargeEvent: {
+          timeRangeLabel: "5pm-7pm",
+          savedPence: 320,
+          chargeUsedPercent: 22,
+          remainingPercent: 68,
+        },
+      }),
+      DATE_ISO,
+    );
+    expect(text).toContain("EV powered your home 5pm-7pm · saved £3.20 · 22% charge used · 68% remaining for tomorrow.");
   });
 
   it("plain text contains EV ready bullet when evChargedAt is set", () => {

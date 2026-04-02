@@ -4,7 +4,7 @@ import type { DeviceAdapterExecutionContext } from "../deviceAdapter";
 import { BaseRealDeviceAdapter, type AdapterOperation, type CanonicalAdapterCommandResult, type CanonicalAdapterError } from "../realDeviceAdapterContract";
 import { WallboxTransportError, type WallboxApiClient, type WallboxCommandResult, type WallboxRemoteAction, type WallboxStatusPayload } from "./WallboxApiClient";
 
-export type WallboxCapability = "read_power" | "schedule_window";
+export type WallboxCapability = "read_power" | "schedule_window" | "vehicle_to_home";
 
 export interface WallboxAdapterConfig {
   deviceId: string;
@@ -16,7 +16,7 @@ export interface WallboxAdapterConfig {
 
 export class WallboxAdapter extends BaseRealDeviceAdapter<WallboxCommandResult, WallboxStatusPayload, WallboxTransportError> {
   readonly adapterId = "wallbox-adapter.v1";
-  readonly capabilities: WallboxCapability[] = ["read_power", "schedule_window"];
+  readonly capabilities: WallboxCapability[] = ["read_power", "schedule_window", "vehicle_to_home"];
 
   private readonly deviceId: string;
   private readonly email: string;

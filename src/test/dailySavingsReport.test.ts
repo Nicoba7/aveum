@@ -159,6 +159,40 @@ describe("buildDailySavingsReport", () => {
     expect(report.cheapestSlotUsed).toBeNull();
     expect(report.batteryDischargedAt).toBeNull();
     expect(report.evChargedAt).toBeNull();
+    expect(report.v2hDischargeEvent).toBeNull();
+  });
+
+  it("aggregates V2H discharge windows into a single event summary", () => {
+    const decisions = [
+      {
+        ...makeDecision("discharge_ev_to_home", "2026-03-25T17:00:00Z", "2026-03-25T17:30:00Z"),
+        startingEvSocPercent: 90,
+        expectedEvSocPercent: 79,
+        expectedEnergyTransferredKwh: 1,
+        expectedValuePence: 28.9,
+      },
+      {
+        ...makeDecision("discharge_ev_to_home", "2026-03-25T17:30:00Z", "2026-03-25T18:00:00Z"),
+        startingEvSocPercent: 79,
+        expectedEvSocPercent: 68,
+        expectedEnergyTransferredKwh: 1,
+        expectedValuePence: 23.8,
+      },
+    ];
+
+    const output = makeOptimizerOutput(decisions, 300, 0);
+    const report = buildDailySavingsReport({
+      optimizerOutput: output,
+      tariffSchedule: TARIFF,
+      setAndForgetNetCostPence: 500,
+    });
+
+    expect(report.v2hDischargeEvent).toEqual({
+      timeRangeLabel: "5pm-6pm",
+      savedPence: 52.7,
+      chargeUsedPercent: 22,
+      remainingPercent: 68,
+    });
   });
 
   describe("oneLiner", () => {

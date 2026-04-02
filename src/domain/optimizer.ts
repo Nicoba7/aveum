@@ -10,6 +10,7 @@ export type PlanningConfidenceLevel = "high" | "medium" | "low";
 export type OptimizerAction =
   | "charge_battery"
   | "discharge_battery"
+  | "discharge_ev_to_home"
   | "charge_ev"
   | "export_to_grid"
   | "consume_solar"
@@ -101,6 +102,12 @@ export interface OptimizerDecision {
   expectedBatterySocPercent?: number;
   /** Expected EV state of charge after the slot. */
   expectedEvSocPercent?: number;
+  /** Expected EV state of charge before the slot executes. */
+  startingEvSocPercent?: number;
+  /** Estimated energy moved by this decision in kWh. */
+  expectedEnergyTransferredKwh?: number;
+  /** Estimated gross household value for this decision in pence. */
+  expectedValuePence?: number;
   /** Machine- and user-readable explanation for the action. */
   reason: string;
   /** Marginal import-avoidance value for one additional stored kWh at this slot. */

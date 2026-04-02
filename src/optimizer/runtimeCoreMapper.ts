@@ -16,6 +16,10 @@ import type {
 import { formatPlanningStyleLabel, getPlanningStylePolicyProfile } from "../domain";
 import { buildMarginalStoredEnergyValueProfile } from "./marginalStoredEnergyValue";
 
+const DEFAULT_V2H_MIN_SOC_PERCENT = 30;
+const V2H_ROUND_TRIP_EFFICIENCY_LOSS = 0.15;
+const DEFAULT_V2H_DISCHARGE_POWER_KW = 7;
+
 export interface CanonicalRuntimeResult {
   schemaVersion: string;
   plannerVersion: string;
@@ -52,6 +56,59 @@ function average(values: number[]): number {
   }
 
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function readNumericMetadata(value: string | number | boolean | null | undefined): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+function readBooleanMetadata(value: string | number | boolean | null | undefined): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+
+  return undefined;
+}
+
+interface V2hContext {
+  chargerDeviceIds: string[];
+  minSocPercent: number;
+}
+
+function resolveV2hContext(input: OptimizerInput): V2hContext {
+  const v2hChargers = input.systemState.devices.filter(
+    (device) =>
+      device.kind === "ev_charger"
+      && (device.connectionStatus === "online" || device.connectionStatus === "degraded")
+      && device.capabilities.includes("vehicle_to_home")
+      && readBooleanMetadata(device.metadata?.v2hCapable) !== false,
+  );
+
+  const metadataMinSoc = v2hChargers
+    .map((device) => readNumericMetadata(device.metadata?.v2hMinSocPercent))
+    .find((value) => value !== undefined);
+
+  return {
+    chargerDeviceIds: v2hChargers.map((device) => device.deviceId),
+    minSocPercent: clamp(metadataMinSoc ?? DEFAULT_V2H_MIN_SOC_PERCENT, 5, 90),
+  };
 }
 
 function toCoverageMetric(availableSlots: number, totalPlannedSlots: number): PlanningInputCoverage["tariffImport"] {
@@ -361,6 +418,10 @@ function requiredCapabilitiesForTarget(
     return kind === "ev_charger" ? ["schedule_window"] : [];
   }
 
+  if (action === "discharge_ev_to_home") {
+    return kind === "ev_charger" ? ["vehicle_to_home"] : [];
+  }
+
   if (action === "charge_battery" || action === "discharge_battery") {
     return kind === "battery" ? ["set_mode"] : [];
   }
@@ -407,6 +468,10 @@ function buildHeadline(decisions: OptimizerDecision[]): string {
     return "Aveum is charging your battery while rates are favorable.";
   }
 
+  if (firstAction.action === "discharge_ev_to_home") {
+    return "Aveum is using EV energy to reduce peak household import.";
+  }
+
   if (firstAction.action === "export_to_grid") {
     return "Aveum is exporting energy while export value is strong.";
   }
@@ -430,6 +495,10 @@ function resolveDispatchTargetDeviceIds(
 
     if (decision.action === "charge_battery" || decision.action === "discharge_battery") {
       return kind === "battery" && Boolean(device?.capabilities.includes("set_mode"));
+    }
+
+    if (decision.action === "discharge_ev_to_home") {
+      return kind === "ev_charger" && Boolean(device?.capabilities.includes("vehicle_to_home"));
     }
 
     if (decision.action === "charge_ev") {
@@ -667,12 +736,17 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
   const evChargerDeviceIds = findDeviceIdsByKind(input, "ev_charger");
   const solarDeviceIds = findDeviceIdsByKind(input, "solar_inverter");
   const gridDeviceIds = findDeviceIdsByKind(input, "smart_meter");
+  const v2hContext = resolveV2hContext(input);
 
   const hasBattery = batteryDeviceIds.length > 0;
   const hasEv =
     input.constraints.allowAutomaticEvCharging &&
     Boolean(input.systemState.evConnected) &&
     evChargerDeviceIds.length > 0;
+  const hasV2h =
+    Boolean(input.systemState.evConnected)
+    && v2hContext.chargerDeviceIds.length > 0
+    && input.systemState.evSocPercent !== undefined;
 
   const importRates = input.tariffSchedule.importRates;
   const exportRates = input.tariffSchedule.exportRates ?? [];
@@ -721,6 +795,7 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
   const negativePriceSlots = new Set<number>();
   const preallocChargeSlots = new Set<number>();
   const preallocDischargeSlots = new Set<number>();
+  const preallocV2hDischargeSlots = new Set<number>();
 
   {
     const batteryRatedChargeKwhPerSlot = 5 * slotHours;
@@ -795,6 +870,54 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
         }
       }
     }
+
+    if (hasV2h && evSoc !== undefined) {
+      let evAvailableKwh = Math.max(
+        0,
+        ((evSoc - v2hContext.minSocPercent) / 100) * evCapacityKwh,
+      );
+
+      if (evAvailableKwh > 0.01) {
+        const v2hCandidates = importRates
+          .map((rate, i) => ({
+            index: i,
+            rate: rate?.unitRatePencePerKwh ?? avgImportRate,
+            netLoadKwh: Math.max(
+              0,
+              (input.forecasts.householdLoadKwh[i]?.value ?? 0.5) - (input.forecasts.solarGenerationKwh[i]?.value ?? 0),
+            ),
+          }))
+          .filter(
+            (slot) =>
+              !negativePriceSlots.has(slot.index)
+              && !preallocDischargeSlots.has(slot.index)
+              && slot.netLoadKwh > 0.05
+              && slot.rate >= highImportThreshold,
+          )
+          .sort((a, b) => b.rate - a.rate);
+
+        for (const slot of v2hCandidates) {
+          if (evAvailableKwh <= 0.01) {
+            break;
+          }
+
+          const plannedKwh = Math.min(
+            DEFAULT_V2H_DISCHARGE_POWER_KW * slotHours,
+            slot.netLoadKwh,
+            evAvailableKwh,
+          );
+          const roundTripEfficiencyLossPencePerKwh = slot.rate * V2H_ROUND_TRIP_EFFICIENCY_LOSS;
+          const slotValuePence = (slot.rate - roundTripEfficiencyLossPencePerKwh) * plannedKwh;
+
+          if (plannedKwh <= 0.01 || slotValuePence <= 0) {
+            continue;
+          }
+
+          preallocV2hDischargeSlots.add(slot.index);
+          evAvailableKwh -= plannedKwh;
+        }
+      }
+    }
   }
 
   // ── Pass 2: Build decision timeline chronologically using pre-allocated plan ──────────────
@@ -807,16 +930,20 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
     const startAt = importRates[index]?.startAt ?? input.forecasts.householdLoadKwh[index]?.startAt ?? generatedAt;
     const endAt = importRates[index]?.endAt ?? input.forecasts.householdLoadKwh[index]?.endAt ?? generatedAt;
     const solarSurplusKwh = Math.max(0, solarKwh - loadKwh);
+    const startingEvSocPercent = evSoc;
 
     let action: OptimizerDecision["action"] = "hold";
     let reason = "Holding while monitoring near-term tariffs and demand.";
     let expectedImportKwh = Math.max(0, loadKwh - solarKwh);
     let expectedExportKwh = 0;
     let targetDeviceIds: string[] = [];
+    let expectedEnergyTransferredKwh: number | undefined;
+    let expectedValuePence: number | undefined;
 
     const isNegativePrice = negativePriceSlots.has(index);
     const isPreallocCharge = preallocChargeSlots.has(index) && !conservatismPolicy.conservativeAdjustmentApplied;
     const isPreallocDischarge = preallocDischargeSlots.has(index) && !conservatismPolicy.conservativeAdjustmentApplied;
+    const isPreallocV2hDischarge = preallocV2hDischargeSlots.has(index) && !conservatismPolicy.conservativeAdjustmentApplied;
 
     const canChargeBattery =
       hasBattery &&
@@ -878,9 +1005,30 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
 
     const chargeValueSpread = futureRetentionValue - currentImportCostToStore;
     const dischargeValueSpread = immediateDischargeRealizedValue - futureRetentionGrossValue;
+    const v2hAvailableKwh = hasV2h && evSoc !== undefined
+      ? Math.max(0, ((evSoc - v2hContext.minSocPercent) / 100) * evCapacityKwh)
+      : 0;
+    const netLoadForV2h = Math.max(0, loadKwh - solarKwh);
+    const v2hDischargeKwhCandidate = Math.min(
+      DEFAULT_V2H_DISCHARGE_POWER_KW * slotHours,
+      netLoadForV2h,
+      v2hAvailableKwh,
+    );
+    const v2hRoundTripEfficiencyLossPencePerKwh = importRate * V2H_ROUND_TRIP_EFFICIENCY_LOSS;
+    const v2hSlotValuePence = Math.max(
+      0,
+      (importRate - v2hRoundTripEfficiencyLossPencePerKwh) * v2hDischargeKwhCandidate,
+    );
 
     const chargeForValue = isPreallocCharge || chargeValueSpread >= conservatismPolicy.minValueSpreadPencePerKwh;
     const dischargeForValue = isPreallocDischarge || dischargeValueSpread >= conservatismPolicy.minValueSpreadPencePerKwh;
+    const dischargeEvToHomeForValue =
+      isPreallocV2hDischarge
+      || (
+        v2hDischargeKwhCandidate > 0.01
+        && importRate >= highImportThreshold
+        && v2hSlotValuePence > 0
+      );
     const styleSuppressesExport =
       activePlanningStyle !== "balanced" &&
       solarSurplusKwh > 0.05 &&
@@ -967,6 +1115,7 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
         targetDeviceIds = [...batteryDeviceIds];
         batterySoc = clamp(batterySoc + (batteryChargeKwh / batteryCapacityKwh) * 100, 0, 100);
         batteryThroughputKwh += batteryChargeKwh;
+        expectedEnergyTransferredKwh = Number(batteryChargeKwh.toFixed(3));
       }
     } else if (
       hasBattery &&
@@ -993,7 +1142,39 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
         batterySoc = clamp(batterySoc - (dischargeKwh / batteryCapacityKwh) * 100, batteryReserve, 100);
         batteryThroughputKwh += dischargeKwh;
         expectedBatteryDegradationCostPence += dischargeKwh * batteryDegradationCostPencePerKwh;
+        expectedEnergyTransferredKwh = Number(dischargeKwh.toFixed(3));
+        expectedValuePence = Number((dischargeKwh * importRate).toFixed(2));
       }
+    } else if (
+      hasV2h
+      && evSoc !== undefined
+      && v2hDischargeKwhCandidate > 0.01
+      && dischargeEvToHomeForValue
+    ) {
+      action = "discharge_ev_to_home";
+      reason = isPreallocV2hDischarge
+        ? `Pre-allocated V2H slot — your EV can cover household demand in one of today’s most expensive import windows (${importRate.toFixed(2)}p/kWh) while preserving a ${v2hContext.minSocPercent}% mobility reserve.`
+        : `Discharging EV to home because avoided peak import value (${v2hSlotValuePence.toFixed(1)}p) is high and the vehicle remains above your ${v2hContext.minSocPercent}% reserve.`;
+
+      expectedImportKwh = Math.max(0, loadKwh - solarKwh - v2hDischargeKwhCandidate);
+      targetDeviceIds = [...v2hContext.chargerDeviceIds];
+      evSoc = clamp(
+        evSoc - (v2hDischargeKwhCandidate / evCapacityKwh) * 100,
+        v2hContext.minSocPercent,
+        100,
+      );
+      expectedEnergyTransferredKwh = Number(v2hDischargeKwhCandidate.toFixed(3));
+      expectedValuePence = Number(v2hSlotValuePence.toFixed(2));
+    }
+
+    if (action === "discharge_ev_to_home" && conservatismPolicy.conservativeAdjustmentApplied && !isPreallocV2hDischarge) {
+      action = "hold";
+      reason = `Holding because planning confidence is ${conservatismPolicy.planningConfidenceLevel} and V2H value is not strong enough under conservative thresholds.`;
+      expectedImportKwh = Math.max(0, loadKwh - solarKwh);
+      targetDeviceIds = [];
+      expectedEnergyTransferredKwh = undefined;
+      expectedValuePence = undefined;
+      evSoc = startingEvSocPercent;
     }
 
     if (
@@ -1059,7 +1240,10 @@ export function buildCanonicalRuntimeResult(input: OptimizerInput): CanonicalRun
       expectedImportKwh: Number(expectedImportKwh.toFixed(3)),
       expectedExportKwh: expectedExportKwh > 0 ? Number(expectedExportKwh.toFixed(3)) : undefined,
       expectedBatterySocPercent: hasBattery ? Number(batterySoc.toFixed(1)) : undefined,
+      startingEvSocPercent: startingEvSocPercent !== undefined ? Number(startingEvSocPercent.toFixed(1)) : undefined,
       expectedEvSocPercent: evSoc !== undefined ? Number(evSoc.toFixed(1)) : undefined,
+      expectedEnergyTransferredKwh,
+      expectedValuePence,
       reason,
       marginalImportAvoidancePencePerKwh: valuePoint?.importAvoidancePencePerKwh,
       marginalExportValuePencePerKwh: valuePoint?.exportOpportunityPencePerKwh,

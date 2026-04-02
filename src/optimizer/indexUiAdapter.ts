@@ -22,7 +22,7 @@ export interface IndexUiViewModel {
 function toLegacyAction(action: OptimizerAction): IndexRecommendationAction {
   if (action === "charge_battery" || action === "charge_ev") return "charge";
   if (action === "export_to_grid") return "export";
-  if (action === "discharge_battery" || action === "consume_solar") return "discharge";
+  if (action === "discharge_battery" || action === "discharge_ev_to_home" || action === "consume_solar") return "discharge";
   return "hold";
 }
 

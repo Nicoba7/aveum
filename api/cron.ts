@@ -11,7 +11,7 @@ import { buildDailySavingsReport } from "../src/features/report/dailySavingsRepo
 import { sendMorningReport } from "../src/features/notifications/morningEmailReport";
 import { trackDailyResult } from "../src/features/analytics/userTracker";
 import type { OptimizationMode, TariffSchedule } from "../src/domain";
-import type { StoredUser } from "./register";
+import type { StoredUser } from "./users";
 import type { DailyResult } from "./results";
 
 const redis = new Redis({
@@ -118,6 +118,30 @@ function toOptimizationMode(raw: string | undefined): OptimizationMode {
   return normalised && valid.includes(normalised) ? normalised : "balanced";
 }
 
+function applyUserEvConfiguration(snapshot: ReturnType<typeof getCanonicalSimulationSnapshot>, config: UserConfig) {
+  const evDevice = snapshot.systemState.devices.find((device) => device.kind === "ev_charger");
+
+  if (!evDevice) {
+    return snapshot;
+  }
+
+  const deviceLevelV2h = config.deviceConfigs?.find((deviceConfig) => deviceConfig.kind === "ev_charger");
+  const v2hCapable = deviceLevelV2h?.v2hCapable ?? config.v2hCapable ?? false;
+  const v2hMinSocPercent = deviceLevelV2h?.v2hMinSocPercent ?? config.v2hMinSocPercent ?? 30;
+
+  evDevice.capabilities = v2hCapable
+    ? Array.from(new Set([...evDevice.capabilities, "vehicle_to_home"]))
+    : evDevice.capabilities.filter((capability) => capability !== "vehicle_to_home");
+
+  evDevice.metadata = {
+    ...(evDevice.metadata ?? {}),
+    v2hCapable,
+    v2hMinSocPercent,
+  };
+
+  return snapshot;
+}
+
 // ── Per-user optimizer run ─────────────────────────────────────────────────────
 
 async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult> {
@@ -146,7 +170,7 @@ async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult>
       ...(exportResults.length ? { exportRates: toTariffRates(exportResults) } : {}),
     };
 
-    const snapshot = getCanonicalSimulationSnapshot(now);
+    const snapshot = applyUserEvConfiguration(getCanonicalSimulationSnapshot(now), config);
     const optimizerOutput = optimize({
       systemState: snapshot.systemState,
       forecasts: snapshot.forecasts,
@@ -156,6 +180,8 @@ async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult>
         allowGridBatteryCharging: true,
         allowBatteryExport: true,
         allowAutomaticEvCharging: true,
+        ...(config.departureTime ? { evReadyBy: config.departureTime } : {}),
+        ...(config.targetSocPercent != null ? { evTargetSocPercent: config.targetSocPercent } : {}),
       },
     });
 

@@ -99,6 +99,12 @@ function buildBullets(report: DailySavingsReport): string[] {
     );
   }
 
+  if (report.v2hDischargeEvent) {
+    bullets.push(
+      `EV powered your home ${report.v2hDischargeEvent.timeRangeLabel} · saved ${formatPounds(report.v2hDischargeEvent.savedPence)} · ${report.v2hDischargeEvent.chargeUsedPercent}% charge used · ${report.v2hDischargeEvent.remainingPercent}% remaining for tomorrow.`,
+    );
+  }
+
   if (report.evChargedAt) {
     bullets.push(
       `EV charged from ${report.evChargedAt.time} at an average of ${formatPenceRate(report.evChargedAt.pricePencePerKwh)} — ready before departure`,

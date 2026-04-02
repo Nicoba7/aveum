@@ -112,6 +112,9 @@ const EV_BRANDS = [
   },
 ];
 
+const V2H_SUPPORTED_EV_BRANDS = new Set(["wallbox", "indra"]);
+const DEFAULT_V2H_MIN_SOC_PERCENT = 30;
+
 // ── FIELD COMPONENT ───────────────────────────────────────────────────────
 function Field({ label, placeholder, hint, link, value, onChange, secret, type }: {
   label: string; placeholder: string; hint?: string; link?: { text: string; url: string };
@@ -473,13 +476,20 @@ function EVForm({ creds, setCreds }: { creds: any; setCreds: any }) {
   const selectedBrand = EV_BRANDS.find((b) => b.id === brand);
   const showComingSoon = selectedBrand?.status === "coming_soon";
   const showBeta = selectedBrand?.status === "beta";
+  const supportsV2h = V2H_SUPPORTED_EV_BRANDS.has(brand);
 
   const handleBrandSelect = (id: string) => {
     setBrand(id);
+    const nextSupportsV2h = V2H_SUPPORTED_EV_BRANDS.has(id);
     setCreds((c: any) => ({
+      ...c,
       brand: id,
       departureTime: c.departureTime,
       targetSocPercent: c.targetSocPercent,
+      v2hCapable: nextSupportsV2h ? Boolean(c.v2hCapable) : false,
+      v2hMinSocPercent: nextSupportsV2h
+        ? c.v2hMinSocPercent ?? DEFAULT_V2H_MIN_SOC_PERCENT
+        : DEFAULT_V2H_MIN_SOC_PERCENT,
     }));
   };
 
@@ -520,6 +530,89 @@ function EVForm({ creds, setCreds }: { creds: any; setCreds: any }) {
       <p style={{ fontSize: 11, color: "#4B5563", marginTop: -8, marginBottom: 18, lineHeight: 1.5 }}>
         Aveum uses these to guarantee your car is ready when you need it.
       </p>
+
+      {supportsV2h && (
+        <div style={{ background: "#0D1521", border: "1px solid #38BDF830", borderRadius: 12, padding: "16px", marginBottom: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF", marginBottom: 4, letterSpacing: 0.5 }}>
+                VEHICLE TO HOME
+              </div>
+              <div style={{ fontSize: 12, color: "#D1D5DB", lineHeight: 1.5 }}>
+                My charger supports V2H (bidirectional charging).
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                setCreds((c: any) => ({
+                  ...c,
+                  v2hCapable: !c.v2hCapable,
+                  v2hMinSocPercent: c.v2hMinSocPercent ?? DEFAULT_V2H_MIN_SOC_PERCENT,
+                }))
+              }
+              style={{
+                width: 50,
+                height: 30,
+                borderRadius: 999,
+                border: "none",
+                background: creds.v2hCapable ? "#22C55E" : "#374151",
+                position: "relative",
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  top: 3,
+                  left: creds.v2hCapable ? 24 : 3,
+                  width: 24,
+                  height: 24,
+                  borderRadius: "50%",
+                  background: "#F9FAFB",
+                  transition: "left 0.15s ease",
+                }}
+              />
+            </button>
+          </div>
+
+          {creds.v2hCapable && (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF", letterSpacing: 0.5 }}>
+                  MINIMUM CHARGE TO KEEP
+                </label>
+                <span style={{ fontSize: 14, fontWeight: 800, color: "#38BDF8" }}>
+                  {creds.v2hMinSocPercent ?? DEFAULT_V2H_MIN_SOC_PERCENT}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min={20}
+                max={60}
+                step={5}
+                value={creds.v2hMinSocPercent ?? DEFAULT_V2H_MIN_SOC_PERCENT}
+                onChange={(e) =>
+                  setCreds((c: any) => ({
+                    ...c,
+                    v2hMinSocPercent: Number(e.target.value),
+                  }))
+                }
+                style={{ width: "100%", accentColor: "#38BDF8", cursor: "pointer" }}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#4B5563", marginTop: 4 }}>
+                <span>20%</span>
+                <span>40%</span>
+                <span>60%</span>
+              </div>
+              <p style={{ fontSize: 11, color: "#9CA3AF", margin: "10px 0 0", lineHeight: 1.5 }}>
+                Aveum will never discharge your EV below this level.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF", marginBottom: 8, letterSpacing: 0.5 }}>SELECT YOUR CHARGER BRAND</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
@@ -681,10 +774,28 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
           cheapRateEnd: octopusCreds.cheapRateEnd || undefined,
           optimizationMode: "balanced",
           devices: selected,
+          deviceConfigs: selected.includes("ev")
+            ? [
+                {
+                  deviceId: "ev",
+                  kind: "ev_charger",
+                  brand: evCreds.brand || undefined,
+                  v2hCapable: Boolean(evCreds.v2hCapable),
+                  v2hMinSocPercent: evCreds.v2hCapable
+                    ? Number(evCreds.v2hMinSocPercent ?? DEFAULT_V2H_MIN_SOC_PERCENT)
+                    : undefined,
+                },
+              ]
+            : undefined,
           ohmeEmail: evCreds.ohmeEmail ?? undefined,
           ohmePassword: evCreds.ohmePassword ?? undefined,
           departureTime: evCreds.departureTime ?? undefined,
           targetSocPercent: evCreds.targetSocPercent != null ? Number(evCreds.targetSocPercent) : undefined,
+          v2hCapable: evCreds.v2hCapable != null ? Boolean(evCreds.v2hCapable) : undefined,
+          v2hMinSocPercent:
+            evCreds.v2hCapable && evCreds.v2hMinSocPercent != null
+              ? Number(evCreds.v2hMinSocPercent)
+              : undefined,
         }),
       });
       if (res.ok) {

@@ -28,6 +28,7 @@ export interface HouseholdEconomicOpportunityResult {
 const HOUSEHOLD_VALUE_SEEKING_ACTIONS = new Set<OptimizerAction>([
   "charge_battery",
   "discharge_battery",
+  "discharge_ev_to_home",
   "charge_ev",
   "export_to_grid",
 ]);
