@@ -222,21 +222,21 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section style={S.hero}>
-        <h1 style={S.headline}>Stop overpaying for electricity.</h1>
+        <h1 style={S.headline}>Stop paying peak prices for electricity.</h1>
         <p style={S.subheadline}>
-          Aveum runs your home at the cheapest times — automatically.
+          Aveum runs your home when electricity is cheapest — automatically.
         </p>
         <p style={S.subheadline}>
-          Aveum automatically optimises your home energy and sends you a daily savings report. Works with every major UK home energy device and smart tariff.
+          Charge at 6pm: £3.10. Charge overnight: £1.80. Aveum picks the £1.80.
         </p>
         <a href="/onboarding" style={S.ctaButton}>Join the beta — it's free</a>
-        <p style={S.proofText}>No setup. No technical knowledge. You stay in control.</p>
+        <p style={S.proofText}>No setup. No guesswork. You stay in control.</p>
       </section>
 
       {/* Proof bar */}
       <div style={S.proofBar}>
         <p style={S.proofText}>
-          We've already saved users money overnight by using cheaper electricity hours.
+          Most homes use electricity at the wrong time. Evenings are expensive. Nights are cheap. Aveum shifts your usage automatically, so you pay less without thinking about it.
         </p>
       </div>
 
@@ -249,24 +249,24 @@ export default function LandingPage() {
         </div>
         <div style={S.step}>
           <div style={S.stepNum}>2</div>
-          <span style={S.stepText}>We run your home when electricity is cheapest</span>
+          <span style={S.stepText}>Aveum finds the cheapest times on your tariff</span>
         </div>
         <div style={S.step}>
           <div style={S.stepNum}>3</div>
-          <span style={S.stepText}>Wake up to money saved</span>
+          <span style={S.stepText}>Your home runs at those times automatically</span>
         </div>
       </section>
 
       {/* Works with */}
       <section style={S.section}>
         <p style={S.worksWith}>
-          Works with Octopus · E.ON · EDF · British Gas · GivEnergy · Solax · SolarEdge · Solis · Fox ESS · Huawei · EcoFlow · myenergi · Tesla · Ohme · Zappi · Hypervolt · Wallbox · Easee · Pod Point · Indra
+          Works with popular UK devices and tariffs including Octopus, Tesla, GivEnergy, and more.
         </p>
         <p style={S.worksWith}>
-          🔒 Your credentials are encrypted and stored in a London-region database. We never sell your data.
+          Your data is encrypted and stored securely in the UK.
         </p>
         <p style={S.worksWith}>
-          You can delete your account and all data at any time.
+          You stay in control. You can delete your data at any time.
         </p>
       </section>
 
