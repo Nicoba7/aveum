@@ -262,6 +262,12 @@ export default function LandingPage() {
         <p style={S.worksWith}>
           Works with Octopus Agile · Tesla · GivEnergy · Solax · Ohme
         </p>
+        <p style={S.worksWith}>
+          🔒 Your credentials are encrypted and stored in a London-region database. We never sell your data.
+        </p>
+        <p style={S.worksWith}>
+          You can delete your account and all data at any time.
+        </p>
       </section>
 
       {/* Beta signup */}
@@ -287,7 +293,8 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer style={S.footer}>
-        getaveum.com · © 2026 Aveum · Built in London
+        getaveum.com · © 2026 Aveum · Built in London ·{" "}
+        <a href="/privacy" style={{ color: "#4B5563", textDecoration: "none" }}>Privacy</a>
       </footer>
     </div>
   );
