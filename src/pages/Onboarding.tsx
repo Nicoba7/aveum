@@ -20,16 +20,22 @@ const DEVICES: Device[] = [
 
 const EV_BRANDS = [
   {
-    id: "tesla",
-    name: "Tesla",
-    description: "Any Tesla vehicle",
-    fields: [],
-    oauth: true,
+    id: "ohme",
+    name: "Ohme",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
+    fields: [
+      { key: "ohmeEmail",    label: "OHME ACCOUNT EMAIL", placeholder: "you@example.com", secret: false, hint: "Your Ohme account email" },
+      { key: "ohmePassword", label: "OHME PASSWORD",       placeholder: "••••••••",        secret: true  },
+    ],
   },
   {
     id: "zappi",
     name: "Zappi",
-    description: "by myenergi",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
     fields: [
       { key: "email",    label: "MYENERGI EMAIL",    placeholder: "you@example.com",  secret: false, hint: "Your myenergi account email" },
       { key: "password", label: "MYENERGI PASSWORD", placeholder: "••••••••",         secret: true  },
@@ -37,19 +43,32 @@ const EV_BRANDS = [
     ],
   },
   {
-    id: "ohme",
-    name: "Ohme",
-    description: "Home / Home Pro / ePod",
-    note: "Used to schedule charging on your behalf via the Ohme app.",
+    id: "tesla",
+    name: "Tesla",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
+    fields: [],
+    oauth: true,
+  },
+  {
+    id: "easee",
+    name: "Easee",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
     fields: [
-      { key: "ohmeEmail",    label: "OHME ACCOUNT EMAIL", placeholder: "you@example.com", secret: false, hint: "Your Ohme account email" },
-      { key: "ohmePassword", label: "OHME PASSWORD",       placeholder: "••••••••",        secret: true  },
+      { key: "email",     label: "EASEE EMAIL",     placeholder: "you@example.com", secret: false, hint: "Your Easee account email or phone number" },
+      { key: "password",  label: "EASEE PASSWORD",  placeholder: "••••••••",        secret: true  },
+      { key: "chargerId", label: "CHARGER ID",      placeholder: "EH123456",        secret: false, hint: "Easee app → Charger → Settings → Charger ID" },
     ],
   },
   {
     id: "hypervolt",
     name: "Hypervolt",
-    description: "Home 3 / Plus",
+    status: "beta",
+    badgeLabel: "⚡ Beta",
+    badgeColor: "#F59E0B",
     fields: [
       { key: "apiKey",     label: "API KEY",     placeholder: "hv_xxxxxxxxxxxx",  secret: true,  hint: "Hypervolt app → Settings → API access" },
       { key: "chargerId",  label: "CHARGER ID",  placeholder: "XXXXXXXXXXXX",     secret: false, hint: "Found in the Hypervolt app under your charger" },
@@ -58,7 +77,9 @@ const EV_BRANDS = [
   {
     id: "wallbox",
     name: "Wallbox",
-    description: "Pulsar / Commander / Copper",
+    status: "beta",
+    badgeLabel: "⚡ Beta",
+    badgeColor: "#F59E0B",
     fields: [
       { key: "email",     label: "WALLBOX EMAIL",     placeholder: "you@example.com", secret: false, hint: "Your myWallbox account email" },
       { key: "password",  label: "WALLBOX PASSWORD",  placeholder: "••••••••",        secret: true  },
@@ -66,23 +87,27 @@ const EV_BRANDS = [
     ],
   },
   {
-    id: "easee",
-    name: "Easee",
-    description: "Home / Charge",
-    fields: [
-      { key: "email",     label: "EASEE EMAIL",     placeholder: "you@example.com", secret: false, hint: "Your Easee account email or phone number" },
-      { key: "password",  label: "EASEE PASSWORD",  placeholder: "••••••••",        secret: true  },
-      { key: "chargerId", label: "CHARGER ID",      placeholder: "EH123456",        secret: false, hint: "Easee app → Charger → Settings → Charger ID" },
-    ],
-  },
-  {
     id: "podpoint",
     name: "Pod Point",
-    description: "Solo / Solo 3",
+    status: "beta",
+    badgeLabel: "⚡ Beta",
+    badgeColor: "#F59E0B",
     fields: [
       { key: "email",  label: "POD POINT EMAIL",    placeholder: "you@example.com", secret: false, hint: "Your Pod Point account email" },
       { key: "password", label: "POD POINT PASSWORD", placeholder: "••••••••",      secret: true  },
       { key: "unitId", label: "UNIT ID",            placeholder: "XXXXXXXX",        secret: false, hint: "Pod Point app → Home Charger → Unit ID" },
+    ],
+  },
+  {
+    id: "indra",
+    name: "Indra",
+    status: "beta",
+    badgeLabel: "⚡ Beta",
+    badgeColor: "#F59E0B",
+    fields: [
+      { key: "email",    label: "INDRA EMAIL",     placeholder: "you@example.com", secret: false, hint: "Your Indra account email" },
+      { key: "password", label: "INDRA PASSWORD",  placeholder: "••••••••",        secret: true },
+      { key: "deviceId", label: "DEVICE ID",       placeholder: "indra-001",       secret: false, hint: "From the Indra app or installer portal" },
     ],
   },
 ];
@@ -247,7 +272,9 @@ const INVERTER_BRANDS = [
   {
     id: "givenergy",
     name: "GivEnergy",
-    description: "All models",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
     fields: [
       { key: "apiKey", label: "API KEY", placeholder: "your-givenergy-api-key", secret: true, hint: "givenergy.cloud → Account Details → Generate API Key", link: { text: "Open GivEnergy", url: "https://givenergy.cloud" } },
       { key: "serial", label: "INVERTER SERIAL NUMBER", placeholder: "SA2XXXXXXXXXX", secret: false, hint: "On the sticker on your inverter or in the app" },
@@ -256,7 +283,9 @@ const INVERTER_BRANDS = [
   {
     id: "solax",
     name: "Solax",
-    description: "X1 / X3 / Hybrid",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
     fields: [
       { key: "tokenId", label: "TOKEN ID", placeholder: "20240XXXXXXXXXXX", secret: true, hint: "solaxcloud.com → Support → Third-party Ecology" },
       { key: "wifiSn", label: "WIFI DONGLE SERIAL", placeholder: "SUT****VB1", secret: false, hint: "Registration number shown in Solax Cloud under your inverter" },
@@ -265,7 +294,9 @@ const INVERTER_BRANDS = [
   {
     id: "solarEdge",
     name: "SolarEdge",
-    description: "With battery",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
     fields: [
       { key: "apiKey", label: "API KEY", placeholder: "your-solaredge-api-key", secret: true, hint: "monitoring.solaredge.com → Admin → Site Access → API Access" },
       { key: "siteId", label: "SITE ID", placeholder: "XXXXXXX", secret: false, hint: "Shown in the URL of your SolarEdge monitoring portal" },
@@ -274,18 +305,100 @@ const INVERTER_BRANDS = [
   {
     id: "solis",
     name: "Solis",
-    description: "S5 / S6",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
     fields: [
       { key: "apiKey", label: "API KEY", placeholder: "your-solis-api-key", secret: true },
       { key: "apiSecret", label: "API SECRET", placeholder: "your-solis-api-secret", secret: true, hint: "Solis Cloud → Account → API Management" },
       { key: "stationId", label: "STATION ID", placeholder: "XXXXXXXXXX", secret: false },
     ],
   },
+  {
+    id: "foxess",
+    name: "Fox ESS",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
+    fields: [
+      { key: "apiKey", label: "FOX ESS API KEY", placeholder: "your-foxess-api-key", secret: true },
+      { key: "deviceSn", label: "DEVICE SERIAL", placeholder: "SNXXXXXXXX", secret: false },
+    ],
+  },
+  {
+    id: "huawei",
+    name: "Huawei FusionSolar",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
+    fields: [
+      { key: "username", label: "FUSIONSOLAR USERNAME", placeholder: "your_fusionsolar_username", secret: false },
+      { key: "systemCode", label: "SYSTEM CODE", placeholder: "your_system_code", secret: true, hint: "Provided in Huawei FusionSolar account settings" },
+    ],
+  },
+  {
+    id: "ecoflow",
+    name: "EcoFlow",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
+    fields: [
+      { key: "accessKey", label: "ACCESS KEY", placeholder: "your-ecoflow-access-key", secret: true },
+      { key: "secretKey", label: "SECRET KEY", placeholder: "your-ecoflow-secret-key", secret: true },
+      { key: "deviceSn", label: "DEVICE SERIAL", placeholder: "R33**********", secret: false },
+    ],
+  },
+  {
+    id: "libbi",
+    name: "myenergi Libbi",
+    status: "supported",
+    badgeLabel: "✓ Supported",
+    badgeColor: "#22C55E",
+    fields: [
+      { key: "email", label: "MYENERGI EMAIL", placeholder: "you@example.com", secret: false },
+      { key: "password", label: "MYENERGI PASSWORD", placeholder: "••••••••", secret: true },
+      { key: "serial", label: "LIBBI SERIAL", placeholder: "LXXXXXXXXX", secret: false },
+    ],
+  },
+  {
+    id: "sigenergy",
+    name: "Sigenergy",
+    status: "beta",
+    badgeLabel: "⚡ Beta",
+    badgeColor: "#F59E0B",
+    fields: [],
+  },
+  {
+    id: "growatt",
+    name: "Growatt",
+    status: "coming_soon",
+    badgeLabel: "Coming soon",
+    badgeColor: "#6B7280",
+    fields: [],
+  },
+  {
+    id: "sunsynk",
+    name: "Sunsynk",
+    status: "coming_soon",
+    badgeLabel: "Coming soon",
+    badgeColor: "#6B7280",
+    fields: [],
+  },
+  {
+    id: "sofar",
+    name: "Sofar Solar",
+    status: "coming_soon",
+    badgeLabel: "Coming soon",
+    badgeColor: "#6B7280",
+    fields: [],
+  },
 ];
 
 function SolarBatteryForm({ creds, setCreds, hasSolar, hasBattery }: { creds: any; setCreds: any; hasSolar: boolean; hasBattery: boolean }) {
   const [brand, setBrand] = useState<string>(creds.brand || "");
   const selectedBrand = INVERTER_BRANDS.find(b => b.id === brand);
+  const showComingSoon = selectedBrand?.status === "coming_soon";
+  const showBeta = selectedBrand?.status === "beta";
 
   const handleBrandSelect = (id: string) => {
     setBrand(id);
@@ -314,11 +427,27 @@ function SolarBatteryForm({ creds, setCreds, hasSolar, hasBattery }: { creds: an
             }}
           >
             <div style={{ fontSize: 13, fontWeight: 700, color: brand === b.id ? "#F59E0B" : "#F9FAFB", marginBottom: 2 }}>{b.name}</div>
-            <div style={{ fontSize: 10, color: "#6B7280" }}>{b.description}</div>
+            <div style={{ display: "inline-flex", alignItems: "center", fontSize: 10, fontWeight: 700, color: b.badgeColor, background: `${b.badgeColor}20`, border: `1px solid ${b.badgeColor}33`, borderRadius: 999, padding: "2px 6px" }}>
+              {b.badgeLabel}
+            </div>
           </button>
         ))}
       </div>
-      {selectedBrand && (
+      {showComingSoon && selectedBrand && (
+        <div style={{ background: "#0D1521", border: "1px solid #374151", borderRadius: 10, padding: "12px 14px", marginBottom: 8 }}>
+          <p style={{ fontSize: 12, color: "#9CA3AF", margin: 0, lineHeight: 1.5 }}>
+            We&apos;re building {selectedBrand.name} support — sign up and we&apos;ll notify you when it&apos;s ready.
+          </p>
+        </div>
+      )}
+      {showBeta && (
+        <div style={{ background: "#221A0D", border: "1px solid #92400E", borderRadius: 10, padding: "12px 14px", marginBottom: 8 }}>
+          <p style={{ fontSize: 12, color: "#F59E0B", margin: 0, lineHeight: 1.5 }}>
+            Beta integration — functional but less tested. We&apos;d love your feedback.
+          </p>
+        </div>
+      )}
+      {selectedBrand && !showComingSoon && (
         <div>
           {selectedBrand.fields.map(field => (
             <Field
@@ -343,6 +472,8 @@ function EVForm({ creds, setCreds }: { creds: any; setCreds: any }) {
   const [brand, setBrand] = useState<string>(creds.brand || "");
 
   const selectedBrand = EV_BRANDS.find(b => b.id === brand);
+  const showComingSoon = selectedBrand?.status === "coming_soon";
+  const showBeta = selectedBrand?.status === "beta";
 
   const handleBrandSelect = (id: string) => {
     setBrand(id);
@@ -391,13 +522,30 @@ function EVForm({ creds, setCreds }: { creds: any; setCreds: any }) {
       </p>
 
       {/* Brand selector */}
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF", marginBottom: 8, letterSpacing: 0.5 }}>SELECT YOUR CHARGER BRAND</div>
+            <div style={{ display: "inline-flex", alignItems: "center", fontSize: 10, fontWeight: 700, color: b.badgeColor, background: `${b.badgeColor}20`, border: `1px solid ${b.badgeColor}33`, borderRadius: 999, padding: "2px 6px" }}>
+              {b.badgeLabel}
+            </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
         {EV_BRANDS.map(b => (
           <button
+
+      {showComingSoon && selectedBrand && (
+        <div style={{ background: "#0D1521", border: "1px solid #374151", borderRadius: 10, padding: "12px 14px", marginBottom: 8 }}>
+          <p style={{ fontSize: 12, color: "#9CA3AF", margin: 0, lineHeight: 1.5 }}>
+            We&apos;re building {selectedBrand.name} support — sign up and we&apos;ll notify you when it&apos;s ready.
+          </p>
+        </div>
+      )}
+      {showBeta && (
+        <div style={{ background: "#221A0D", border: "1px solid #92400E", borderRadius: 10, padding: "12px 14px", marginBottom: 8 }}>
+          <p style={{ fontSize: 12, color: "#F59E0B", margin: 0, lineHeight: 1.5 }}>
+            Beta integration — functional but less tested. We&apos;d love your feedback.
+          </p>
+        </div>
+      )}
             key={b.id}
             onClick={() => handleBrandSelect(b.id)}
-            style={{
+      {brand === "tesla" && !showComingSoon && (
               background: brand === b.id ? "#38BDF820" : "#111827",
               border: `2px solid ${brand === b.id ? "#38BDF8" : "#374151"}`,
               borderRadius: 10, padding: "10px 12px", cursor: "pointer",
@@ -426,7 +574,7 @@ function EVForm({ creds, setCreds }: { creds: any; setCreds: any }) {
       )}
 
       {/* Dynamic fields for selected brand */}
-      {selectedBrand && !(selectedBrand as any).oauth && (
+      {selectedBrand && !selectedBrand.oauth && !showComingSoon && (
         <div>
           {selectedBrand.fields.map(field => (
             <Field
@@ -439,8 +587,8 @@ function EVForm({ creds, setCreds }: { creds: any; setCreds: any }) {
               onChange={v => setCreds((c: any) => ({ ...c, [field.key]: v }))}
             />
           ))}
-          {(selectedBrand as any).note && (
-            <p style={{ fontSize: 11, color: "#4B5563", marginTop: 6, lineHeight: 1.5 }}>{(selectedBrand as any).note}</p>
+          {selectedBrand.note && (
+            <p style={{ fontSize: 11, color: "#4B5563", marginTop: 6, lineHeight: 1.5 }}>{selectedBrand.note}</p>
           )}
         </div>
       )}
