@@ -197,7 +197,37 @@ function OctopusForm({ creds, setCreds, skipped, onSkip, onUnskip }: { creds: an
             <option key={option.value} value={option.value}>{option.label} ({option.description})</option>
           ))}
         </select>
+        <div style={{ marginTop: 6, textAlign: "right" }}>
+          <a
+            href="/why-agile"
+            style={{ fontSize: 11, color: "#93C5FD", textDecoration: "none" }}
+          >
+            Why Agile?
+          </a>
+        </div>
       </div>
+
+      {!isOctopusTariff && (
+        <div style={{ background: "#0B1725", border: "1px solid #1E3A5F", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#E2E8F0", marginBottom: 6 }}>
+            Switch to Octopus Agile and save more
+          </div>
+          <p style={{ fontSize: 12, color: "#9CA3AF", margin: "0 0 10px", lineHeight: 1.5 }}>
+            Octopus Agile gives Aveum half-hourly prices to optimise against — unlocking the full saving and earning potential. Most users save an extra £200-400/year by switching.
+          </p>
+          <a
+            href="https://share.octopus.energy/aveum"
+            target="_blank"
+            rel="noreferrer"
+            style={{ display: "inline-block", background: "#22C55E", color: "#030712", fontSize: 12, fontWeight: 800, textDecoration: "none", padding: "9px 12px", borderRadius: 8 }}
+          >
+            Switch to Octopus Agile →
+          </a>
+          <p style={{ fontSize: 11, color: "#6B7280", margin: "8px 0 0" }}>
+            Takes 5 minutes. No engineer visit needed.
+          </p>
+        </div>
+      )}
 
       {/* Region selector — always shown */}
       <div style={{ marginBottom: 14 }}>

@@ -14,6 +14,7 @@ import LandingPage from "./pages/LandingPage";
 import SimplifiedDashboard from "./pages/SimplifiedDashboard";
 import DeviceManagement from "./pages/DeviceManagement";
 import Settings from "./pages/Settings";
+import WhyAgile from "./pages/WhyAgile";
 import NotFound from "./pages/NotFound";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
@@ -33,6 +34,7 @@ const App = () => (
           <Route path="/dashboard" element={<SimplifiedDashboard />} />
           <Route path="/devices" element={<DeviceManagement />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/why-agile" element={<WhyAgile />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
           <Route path="/customer-value" element={<CustomerValue />} />
           <Route path="/network-growth" element={<NetworkGrowth />} />
