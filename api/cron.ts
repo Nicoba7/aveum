@@ -19,6 +19,13 @@ import {
   formatPowerUpAlertMessage,
   type OctopusPowerUpEvent,
 } from "../src/features/powerup/octopusPowerUpDetector";
+import {
+  calculateSavingSessionActions,
+  formatSavingSessionEmail,
+  getRecentSavingSessions,
+  getUpcomingSavingSessions,
+  joinSavingSession,
+} from "../src/features/savingSessions/savingSessionsService";
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
@@ -174,6 +181,39 @@ async function sendPowerUpAlertEmail(config: UserConfig, event: OctopusPowerUpEv
     subject: "Aveum — Free electricity detected",
     text: message,
     html: `<p>${message}</p>`,
+  });
+
+  return true;
+}
+
+async function sendSavingSessionEmail(config: UserConfig, html: string): Promise<boolean> {
+  const smtpHost = config.smtpHost || process.env.AVEUM_SMTP_HOST;
+  const smtpUser = config.smtpUser || process.env.AVEUM_SMTP_USER;
+  const smtpPass = config.smtpPass || process.env.AVEUM_SMTP_PASS;
+  const notifyEmail = config.notifyEmail || process.env.AVEUM_NOTIFY_EMAIL;
+
+  if (!smtpHost || !smtpUser || !smtpPass || !notifyEmail) {
+    return false;
+  }
+
+  const smtpPort = config.smtpPort ?? parseInt(process.env.AVEUM_SMTP_PORT ?? "587", 10);
+  const fromEmail = config.fromEmail || process.env.AVEUM_FROM_EMAIL || smtpUser;
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: Number.isFinite(smtpPort) ? smtpPort : 587,
+    secure: smtpPort === 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  });
+
+  await transporter.sendMail({
+    from: `"Aveum" <${fromEmail}>`,
+    to: notifyEmail,
+    subject: "Aveum — Saving Session joined",
+    text: "Saving Session joined. Aveum has scheduled your battery and EV actions automatically.",
+    html,
   });
 
   return true;
@@ -373,6 +413,61 @@ async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult>
       setAndForgetNetCostPence: 0,
     });
 
+    const snapshotForSavingSessions = applyUserEvConfiguration(getCanonicalSimulationSnapshot(now), config);
+    let savingSessionTrackerNote = "Saving Session: none.";
+
+    try {
+      const upcomingSavingSessions = await getUpcomingSavingSessions(
+        config.octopusApiKey,
+        config.octopusAccountNumber,
+      );
+
+      const next24hMs = now.getTime() + 24 * 60 * 60 * 1000;
+      const nearestSession = upcomingSavingSessions.find((session) => {
+        const startMs = new Date(session.startAt).getTime();
+        return Number.isFinite(startMs) && startMs <= next24hMs;
+      });
+
+      if (nearestSession) {
+        const joinOutcome = await joinSavingSession(
+          config.octopusApiKey,
+          config.octopusAccountNumber,
+          nearestSession.id,
+        );
+
+        const actionPlan = calculateSavingSessionActions(
+          nearestSession,
+          snapshotForSavingSessions.systemState.devices,
+        );
+
+        await redis.set(
+          `aveum:saving-sessions:${config.userId}:${nearestSession.id}`,
+          JSON.stringify({
+            joinedAt: now.toISOString(),
+            session: nearestSession,
+            joinOutcome,
+            actions: actionPlan.actions,
+            explanation: actionPlan.explanation,
+          }),
+        );
+
+        const estimatedEarningPounds = Number(
+          (nearestSession.rewardPerKwhInOctopoints * 0.008 * Math.max(1, actionPlan.actions.length)).toFixed(2),
+        );
+
+        if (joinOutcome.joined) {
+          void sendSavingSessionEmail(
+            config,
+            formatSavingSessionEmail(nearestSession, actionPlan.actions, estimatedEarningPounds),
+          ).catch(() => undefined);
+        }
+
+        savingSessionTrackerNote = `Saving Session: ${joinOutcome.joined ? "joined" : "join failed"} (${joinOutcome.message}). Actions: ${actionPlan.actions.length}.`;
+      }
+    } catch (error: unknown) {
+      savingSessionTrackerNote = `Saving Session: check failed (${error instanceof Error ? error.message : String(error)}).`;
+    }
+
     let reportForEmail = dailySavingsReport;
     try {
       const powerUpDetection = await detectOctopusPowerUpEvents({
@@ -388,6 +483,42 @@ async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult>
           powerUpOvernightSummary: {
             count: powerUpDetection.overnightEvents.length,
             chargedKwh: powerUpDetection.overnightChargedKwhEstimate,
+          },
+        };
+      }
+    } catch {
+      // Best-effort enrichment only.
+    }
+
+    try {
+      const recentSavingSessions = await getRecentSavingSessions(
+        config.octopusApiKey,
+        config.octopusAccountNumber,
+      );
+
+      const overnightStart = new Date(now);
+      overnightStart.setUTCHours(0, 0, 0, 0);
+      overnightStart.setUTCDate(overnightStart.getUTCDate() - 1);
+      const overnightEnd = new Date(now);
+      overnightEnd.setUTCHours(6, 0, 0, 0);
+
+      const participated = recentSavingSessions.find((session) => {
+        const endMs = new Date(session.endAt).getTime();
+        return (
+          Number.isFinite(endMs)
+          && endMs >= overnightStart.getTime()
+          && endMs <= overnightEnd.getTime()
+          && /joined|participated|completed/i.test(session.joinStatus)
+        );
+      });
+
+      if (participated) {
+        const estimatedEarningPounds = Number((participated.rewardPerKwhInOctopoints * 0.008).toFixed(2));
+        reportForEmail = {
+          ...reportForEmail,
+          savingSessionOvernightSummary: {
+            participated: true,
+            estimatedEarningPounds,
           },
         };
       }
@@ -432,6 +563,7 @@ async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult>
       netCostPence,
       evTargetAchieved: config.devices?.includes("ev") ? true : null,
       emailSent,
+      savingSessionLog: savingSessionTrackerNote,
     });
 
     // ── Persist daily result for dashboard read-back ─────────────────────────

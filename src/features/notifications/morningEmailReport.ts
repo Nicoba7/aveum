@@ -117,6 +117,12 @@ function buildBullets(report: DailySavingsReport): string[] {
     );
   }
 
+  if (report.savingSessionOvernightSummary?.participated) {
+    bullets.push(
+      `Saving Session: participated, estimated earning £${report.savingSessionOvernightSummary.estimatedEarningPounds.toFixed(2)}.`,
+    );
+  }
+
   if (report.evChargedAt) {
     bullets.push(
       `EV charged from ${report.evChargedAt.time} at an average of ${formatPenceRate(report.evChargedAt.pricePencePerKwh)} — ready before departure`,

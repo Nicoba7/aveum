@@ -39,6 +39,8 @@ export interface DailyResultTrackingInput {
   evTargetAchieved: boolean | null;
   /** Whether the morning email was successfully delivered. */
   emailSent: boolean;
+  /** Optional Saving Session automation outcome summary. */
+  savingSessionLog?: string;
 }
 
 // ── Notion API helpers ─────────────────────────────────────────────────────────
@@ -92,7 +94,10 @@ export async function trackDailyResult(
     return { tracked: false, skippedReason: "NOTION_RESULTS_DATABASE_ID not set." };
   }
 
-  const { userName, notifyEmail, dateIso, report, netCostPence, evTargetAchieved, emailSent } = input;
+  const { userName, notifyEmail, dateIso, report, netCostPence, evTargetAchieved, emailSent, savingSessionLog } = input;
+  const summaryText = savingSessionLog
+    ? `${report.oneLiner} ${savingSessionLog}`
+    : report.oneLiner;
 
   const body = {
     parent: { database_id: databaseId },
@@ -128,7 +133,7 @@ export async function trackDailyResult(
         rich_text: richText(slotLabel(report.batteryDischargedAt)),
       },
       "Summary": {
-        rich_text: richText(report.oneLiner),
+        rich_text: richText(summaryText),
       },
       "Email sent": {
         checkbox: emailSent,

@@ -28,6 +28,11 @@ export interface PowerUpOvernightSummary {
   chargedKwh: number;
 }
 
+export interface SavingSessionOvernightSummary {
+  participated: boolean;
+  estimatedEarningPounds: number;
+}
+
 // ── Output ─────────────────────────────────────────────────────────────────────
 
 export interface SlotTimePrice {
@@ -74,6 +79,10 @@ export interface DailySavingsReport {
    * Optional overnight Octopus Power-Up summary injected by the cron pipeline.
    */
   powerUpOvernightSummary?: PowerUpOvernightSummary | null;
+  /**
+   * Optional overnight Saving Session participation summary injected by the cron pipeline.
+   */
+  savingSessionOvernightSummary?: SavingSessionOvernightSummary | null;
   /**
    * A single-sentence plain-English summary of what Aveum achieved today.
    * Example: "Aveum charged your battery at 2.3p and discharged at 34p, saving you £1.23 today."
@@ -302,6 +311,7 @@ export function buildDailySavingsReport(input: DailySavingsReportInput): DailySa
     v2hDischargeEvent,
     solarDivertEvent,
     powerUpOvernightSummary: null,
+    savingSessionOvernightSummary: null,
     oneLiner,
     nightlyNarrative,
   };
@@ -320,7 +330,7 @@ interface OneLinerInput {
 }
 
 function buildOneLiner(input: OneLinerInput): string {
-  const { savedTodayPence, cheapestSlotUsed, batteryDischargedAt, v2hDischargeEvent, evChargedAt, earnedFromExportPence } = input;
+  const { savedTodayPence, cheapestSlotUsed, batteryDischargedAt, v2hDischargeEvent, solarDivertEvent, evChargedAt, earnedFromExportPence } = input;
 
   const savingsPhrase =
     savedTodayPence > 0
