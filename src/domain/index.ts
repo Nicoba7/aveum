@@ -9,13 +9,13 @@ export type {
   DeviceMode,
   DeviceState,
   TimeWindow,
-} from "./device";
-export type { ForecastPoint, Forecasts } from "./forecasts";
+} from "./device.js";
+export type { ForecastPoint, Forecasts } from "./forecasts.js";
 export type {
   PlanningStyle,
   PlanningStylePolicyProfile,
   PlanningStyleRuntimeInputs,
-} from "./planningStyle";
+} from "./planningStyle.js";
 export {
   DEFAULT_PLANNING_STYLE,
   formatPlanningStyleLabel,
@@ -23,7 +23,7 @@ export {
   isPlanningStyle,
   mapOptimizationModeToPlanningStyle,
   resolvePlanningStyleFromValue,
-} from "./planningStyle";
+} from "./planningStyle.js";
 export type {
   Constraints,
   OptimizationMode,
@@ -41,27 +41,27 @@ export type {
   PlanningInputCoverage,
   OptimizerStatus,
   OptimizerSummary,
-} from "./optimizer";
+} from "./optimizer.js";
 export type {
   IntentObservedDriftOutcome,
   IntentObservedDriftReasonCode,
   IntentObservedDriftResult,
-} from "./intentObservedDrift";
-export type { CanonicalChargingState, CanonicalDeviceObservedState } from "./observedDeviceState";
+} from "./intentObservedDrift.js";
+export type { CanonicalChargingState, CanonicalDeviceObservedState } from "./observedDeviceState.js";
 export type {
   DeviceObservedStateFreshness,
   ObservedStateFreshnessStatus,
   ObservedStateFreshnessSummary,
-} from "./observedStateFreshness";
-export type { SystemState } from "./system";
-export type { TariffRate, TariffRateSource, TariffSchedule } from "./tariff";
+} from "./observedStateFreshness.js";
+export type { SystemState } from "./system.js";
+export type { TariffRate, TariffRateSource, TariffSchedule } from "./tariff.js";
 export type {
   DeviceTelemetryHealth,
   TelemetryHealthReasonCode,
   TelemetryHealthStatus,
   TelemetryHealthSummary,
-} from "./telemetryHealth";
-export type { CanonicalDeviceTelemetry } from "./telemetry";
-export type { CustomerValueSummary } from "./customerValueSummary";
-export { mapValueLedgerToCustomerValueSummary } from "./customerValueSummary";
-export type { CanonicalValueLedger, ValueLedgerBaselineType } from "./valueLedger";
+} from "./telemetryHealth.js";
+export type { CanonicalDeviceTelemetry } from "./telemetry.js";
+export type { CustomerValueSummary } from "./customerValueSummary.js";
+export { mapValueLedgerToCustomerValueSummary } from "./customerValueSummary.js";
+export type { CanonicalValueLedger, ValueLedgerBaselineType } from "./valueLedger.js";
