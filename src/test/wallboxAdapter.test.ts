@@ -37,7 +37,7 @@ describe("WallboxAdapter", () => {
 
   it("declares capabilities", () => {
     const adapter = new WallboxAdapter({ deviceId: DEVICE_ID, email: EMAIL, password: PASSWORD, chargerId: CHARGER_ID, client: makeClient() });
-    expect(adapter.capabilities).toEqual(["read_power", "schedule_window"]);
+    expect(adapter.capabilities).toEqual(["read_power", "schedule_window", "vehicle_to_home"]);
   });
 
   it("reads telemetry", async () => {

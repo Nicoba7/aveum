@@ -29,6 +29,9 @@ export interface RuntimeExecutionGuardrailDecision {
 const AGGRESSIVE_ACTIONS = new Set<OptimizerAction>([
   "charge_battery",
   "discharge_battery",
+  "discharge_ev_to_home",
+  "divert_solar_to_ev",
+  "divert_solar_to_battery",
   "export_to_grid",
   "charge_ev",
 ]);

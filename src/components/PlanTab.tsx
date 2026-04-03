@@ -74,6 +74,12 @@ function mapDecisionToHeadline(decision: string): string {
       return "Charging battery";
     case "discharge_battery":
       return "Powering home from battery";
+    case "discharge_ev_to_home":
+      return "EV powering your home";
+    case "divert_solar_to_ev":
+      return "Diverting solar to EV";
+    case "divert_solar_to_battery":
+      return "Diverting solar to battery";
     case "charge_ev":
     case "start_charging":
       return "Charging EV";
@@ -173,6 +179,7 @@ function buildUpcomingDecisionViewModels(
       drivers: entry.explanation.drivers,
       confidence: entry.explanation.confidence,
       timestamp,
+      observedAt: entry.timestamp,
     } satisfies UpcomingDecisionViewModel;
   });
 

@@ -255,6 +255,10 @@ export default function LandingPage() {
           <div style={S.stepNum}>3</div>
           <span style={S.stepText}>Your home runs at those times automatically</span>
         </div>
+        <div style={S.step}>
+          <div style={S.stepNum}>4</div>
+          <span style={S.stepText}>Your EV powers your home during peak prices — saving up to £3/evening</span>
+        </div>
       </section>
 
       {/* Works with */}

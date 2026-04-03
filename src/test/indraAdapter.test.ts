@@ -37,7 +37,7 @@ describe("IndraAdapter", () => {
 
   it("declares capabilities", () => {
     const adapter = new IndraAdapter({ deviceId: DEVICE_ID, email: EMAIL, password: PASSWORD, indraDeviceId: DEVICE_KEY, client: makeClient() });
-    expect(adapter.capabilities).toEqual(["read_power", "schedule_window"]);
+    expect(adapter.capabilities).toEqual(["read_power", "schedule_window", "vehicle_to_home"]);
   });
 
   it("reads telemetry", async () => {

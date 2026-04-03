@@ -11,8 +11,21 @@ import { buildDailySavingsReport } from "../src/features/report/dailySavingsRepo
 import { sendMorningReport } from "../src/features/notifications/morningEmailReport";
 import { trackDailyResult } from "../src/features/analytics/userTracker";
 import type { OptimizationMode, TariffSchedule } from "../src/domain";
-import type { StoredUser } from "./register";
+import type { StoredUser } from "./users";
 import type { DailyResult } from "./results";
+import nodemailer from "nodemailer";
+import {
+  detectOctopusPowerUpEvents,
+  formatPowerUpAlertMessage,
+  type OctopusPowerUpEvent,
+} from "../src/features/powerup/octopusPowerUpDetector";
+import {
+  calculateSavingSessionActions,
+  formatSavingSessionEmail,
+  getRecentSavingSessions,
+  getUpcomingSavingSessions,
+  joinSavingSession,
+} from "../src/features/savingSessions/savingSessionsService";
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
@@ -21,7 +34,7 @@ const redis = new Redis({
 
 const KV_KEY = "aveum:users";
 
-async function readStoredUsers(): Promise<StoredUser[]> {
+export async function readStoredUsers(): Promise<StoredUser[]> {
   try {
     const raw = await redis.lrange<string>(KV_KEY, 0, -1);
     return raw.map((entry) => JSON.parse(entry) as StoredUser);
@@ -41,6 +54,21 @@ type UserConfig = StoredUser & {
   smtpPass?: string;
   fromEmail?: string;
 };
+
+interface PowerUpSweepUserResult {
+  userId: string;
+  accountNumber: string;
+  detectedEvents: number;
+  scheduledCommands: number;
+  notificationSent: boolean;
+  error?: string;
+}
+
+export interface PowerUpSweepResult {
+  checkedUsers: number;
+  triggeredUsers: number;
+  results: PowerUpSweepUserResult[];
+}
 
 interface UserRunResult {
   octopusAccountNumber: string;
@@ -118,6 +146,223 @@ function toOptimizationMode(raw: string | undefined): OptimizationMode {
   return normalised && valid.includes(normalised) ? normalised : "balanced";
 }
 
+function isDaytimeSweepWindow(now: Date): boolean {
+  const hour = now.getUTCHours();
+  return hour >= 6 && hour <= 22;
+}
+
+async function sendPowerUpAlertEmail(config: UserConfig, event: OctopusPowerUpEvent): Promise<boolean> {
+  const smtpHost = config.smtpHost || process.env.AVEUM_SMTP_HOST;
+  const smtpUser = config.smtpUser || process.env.AVEUM_SMTP_USER;
+  const smtpPass = config.smtpPass || process.env.AVEUM_SMTP_PASS;
+  const notifyEmail = config.notifyEmail || process.env.AVEUM_NOTIFY_EMAIL;
+
+  if (!smtpHost || !smtpUser || !smtpPass || !notifyEmail) {
+    return false;
+  }
+
+  const smtpPort = config.smtpPort ?? parseInt(process.env.AVEUM_SMTP_PORT ?? "587", 10);
+  const fromEmail = config.fromEmail || process.env.AVEUM_FROM_EMAIL || smtpUser;
+  const message = formatPowerUpAlertMessage(event);
+
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: Number.isFinite(smtpPort) ? smtpPort : 587,
+    secure: smtpPort === 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  });
+
+  await transporter.sendMail({
+    from: `"Aveum" <${fromEmail}>`,
+    to: notifyEmail,
+    subject: "Aveum — Free electricity detected",
+    text: message,
+    html: `<p>${message}</p>`,
+  });
+
+  return true;
+}
+
+async function sendSavingSessionEmail(config: UserConfig, html: string): Promise<boolean> {
+  const smtpHost = config.smtpHost || process.env.AVEUM_SMTP_HOST;
+  const smtpUser = config.smtpUser || process.env.AVEUM_SMTP_USER;
+  const smtpPass = config.smtpPass || process.env.AVEUM_SMTP_PASS;
+  const notifyEmail = config.notifyEmail || process.env.AVEUM_NOTIFY_EMAIL;
+
+  if (!smtpHost || !smtpUser || !smtpPass || !notifyEmail) {
+    return false;
+  }
+
+  const smtpPort = config.smtpPort ?? parseInt(process.env.AVEUM_SMTP_PORT ?? "587", 10);
+  const fromEmail = config.fromEmail || process.env.AVEUM_FROM_EMAIL || smtpUser;
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: Number.isFinite(smtpPort) ? smtpPort : 587,
+    secure: smtpPort === 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  });
+
+  await transporter.sendMail({
+    from: `"Aveum" <${fromEmail}>`,
+    to: notifyEmail,
+    subject: "Aveum — Saving Session joined",
+    text: "Saving Session joined. Aveum has scheduled your battery and EV actions automatically.",
+    html,
+  });
+
+  return true;
+}
+
+function buildPowerUpChargeCommands(
+  config: UserConfig,
+  event: OctopusPowerUpEvent,
+): Array<Record<string, unknown>> {
+  const snapshot = applyUserEvConfiguration(getCanonicalSimulationSnapshot(new Date(event.startAt)), config);
+  const commands: Array<Record<string, unknown>> = [];
+
+  for (const device of snapshot.systemState.devices) {
+    if (device.connectionStatus !== "online" && device.connectionStatus !== "degraded") {
+      continue;
+    }
+
+    if (device.kind === "battery") {
+      commands.push({
+        deviceId: device.deviceId,
+        type: "set_mode",
+        mode: "charge",
+        startAt: event.startAt,
+        endAt: event.endAt,
+        reason: "Octopus Power-Up free window",
+      });
+    }
+
+    if (device.kind === "ev_charger") {
+      commands.push({
+        deviceId: device.deviceId,
+        type: "schedule_window",
+        targetMode: "charge",
+        startAt: event.startAt,
+        endAt: event.endAt,
+        reason: "Octopus Power-Up free window",
+      });
+    }
+  }
+
+  return commands;
+}
+
+export async function runPowerUpSweepForUsers(
+  userConfigs: UserConfig[],
+  now: Date,
+): Promise<PowerUpSweepResult> {
+  if (!isDaytimeSweepWindow(now)) {
+    return {
+      checkedUsers: 0,
+      triggeredUsers: 0,
+      results: [],
+    };
+  }
+
+  const results: PowerUpSweepUserResult[] = [];
+
+  for (const config of userConfigs) {
+    if (!config.octopusApiKey || !config.octopusAccountNumber) {
+      continue;
+    }
+
+    try {
+      const detection = await detectOctopusPowerUpEvents({
+        apiKey: config.octopusApiKey,
+        accountNumber: config.octopusAccountNumber,
+        now,
+        lookaheadHours: 2,
+      });
+
+      const activeEvent = detection.activeOrUpcomingEvents[0];
+      if (!activeEvent) {
+        results.push({
+          userId: config.userId,
+          accountNumber: config.octopusAccountNumber,
+          detectedEvents: 0,
+          scheduledCommands: 0,
+          notificationSent: false,
+        });
+        continue;
+      }
+
+      const commands = buildPowerUpChargeCommands(config, activeEvent);
+      await redis.set(
+        `aveum:powerup:commands:${config.userId}`,
+        JSON.stringify({
+          generatedAt: now.toISOString(),
+          event: activeEvent,
+          commands,
+        }),
+      );
+
+      let notificationSent = false;
+      try {
+        notificationSent = await sendPowerUpAlertEmail(config, activeEvent);
+      } catch {
+        notificationSent = false;
+      }
+
+      results.push({
+        userId: config.userId,
+        accountNumber: config.octopusAccountNumber,
+        detectedEvents: detection.activeOrUpcomingEvents.length,
+        scheduledCommands: commands.length,
+        notificationSent,
+      });
+    } catch (error: unknown) {
+      results.push({
+        userId: config.userId,
+        accountNumber: config.octopusAccountNumber,
+        detectedEvents: 0,
+        scheduledCommands: 0,
+        notificationSent: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    checkedUsers: results.length,
+    triggeredUsers: results.filter((result) => result.detectedEvents > 0).length,
+    results,
+  };
+}
+
+function applyUserEvConfiguration(snapshot: ReturnType<typeof getCanonicalSimulationSnapshot>, config: UserConfig) {
+  const evDevice = snapshot.systemState.devices.find((device) => device.kind === "ev_charger");
+
+  if (!evDevice) {
+    return snapshot;
+  }
+
+  const deviceLevelV2h = config.deviceConfigs?.find((deviceConfig) => deviceConfig.kind === "ev_charger");
+  const v2hCapable = deviceLevelV2h?.v2hCapable ?? config.v2hCapable ?? false;
+  const v2hMinSocPercent = deviceLevelV2h?.v2hMinSocPercent ?? config.v2hMinSocPercent ?? 30;
+
+  evDevice.capabilities = v2hCapable
+    ? Array.from(new Set([...evDevice.capabilities, "vehicle_to_home"]))
+    : evDevice.capabilities.filter((capability) => capability !== "vehicle_to_home");
+
+  evDevice.metadata = {
+    ...(evDevice.metadata ?? {}),
+    v2hCapable,
+    v2hMinSocPercent,
+  };
+
+  return snapshot;
+}
+
 // ── Per-user optimizer run ─────────────────────────────────────────────────────
 
 async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult> {
@@ -146,7 +391,7 @@ async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult>
       ...(exportResults.length ? { exportRates: toTariffRates(exportResults) } : {}),
     };
 
-    const snapshot = getCanonicalSimulationSnapshot(now);
+    const snapshot = applyUserEvConfiguration(getCanonicalSimulationSnapshot(now), config);
     const optimizerOutput = optimize({
       systemState: snapshot.systemState,
       forecasts: snapshot.forecasts,
@@ -156,6 +401,9 @@ async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult>
         allowGridBatteryCharging: true,
         allowBatteryExport: true,
         allowAutomaticEvCharging: true,
+        solarDivertEnabled: true,
+        ...(config.departureTime ? { evReadyBy: config.departureTime } : {}),
+        ...(config.targetSocPercent != null ? { evTargetSocPercent: config.targetSocPercent } : {}),
       },
     });
 
@@ -164,6 +412,119 @@ async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult>
       tariffSchedule,
       setAndForgetNetCostPence: 0,
     });
+
+    const snapshotForSavingSessions = applyUserEvConfiguration(getCanonicalSimulationSnapshot(now), config);
+    let savingSessionTrackerNote = "Saving Session: none.";
+
+    try {
+      const upcomingSavingSessions = await getUpcomingSavingSessions(
+        config.octopusApiKey,
+        config.octopusAccountNumber,
+      );
+
+      const next24hMs = now.getTime() + 24 * 60 * 60 * 1000;
+      const nearestSession = upcomingSavingSessions.find((session) => {
+        const startMs = new Date(session.startAt).getTime();
+        return Number.isFinite(startMs) && startMs <= next24hMs;
+      });
+
+      if (nearestSession) {
+        const joinOutcome = await joinSavingSession(
+          config.octopusApiKey,
+          config.octopusAccountNumber,
+          nearestSession.id,
+        );
+
+        const actionPlan = calculateSavingSessionActions(
+          nearestSession,
+          snapshotForSavingSessions.systemState.devices,
+        );
+
+        await redis.set(
+          `aveum:saving-sessions:${config.userId}:${nearestSession.id}`,
+          JSON.stringify({
+            joinedAt: now.toISOString(),
+            session: nearestSession,
+            joinOutcome,
+            actions: actionPlan.actions,
+            explanation: actionPlan.explanation,
+          }),
+        );
+
+        const estimatedEarningPounds = Number(
+          (nearestSession.rewardPerKwhInOctopoints * 0.008 * Math.max(1, actionPlan.actions.length)).toFixed(2),
+        );
+
+        if (joinOutcome.joined) {
+          void sendSavingSessionEmail(
+            config,
+            formatSavingSessionEmail(nearestSession, actionPlan.actions, estimatedEarningPounds),
+          ).catch(() => undefined);
+        }
+
+        savingSessionTrackerNote = `Saving Session: ${joinOutcome.joined ? "joined" : "join failed"} (${joinOutcome.message}). Actions: ${actionPlan.actions.length}.`;
+      }
+    } catch (error: unknown) {
+      savingSessionTrackerNote = `Saving Session: check failed (${error instanceof Error ? error.message : String(error)}).`;
+    }
+
+    let reportForEmail = dailySavingsReport;
+    try {
+      const powerUpDetection = await detectOctopusPowerUpEvents({
+        apiKey: config.octopusApiKey,
+        accountNumber: config.octopusAccountNumber,
+        now,
+        lookaheadHours: 0,
+      });
+
+      if (powerUpDetection.overnightEvents.length > 0) {
+        reportForEmail = {
+          ...dailySavingsReport,
+          powerUpOvernightSummary: {
+            count: powerUpDetection.overnightEvents.length,
+            chargedKwh: powerUpDetection.overnightChargedKwhEstimate,
+          },
+        };
+      }
+    } catch {
+      // Best-effort enrichment only.
+    }
+
+    try {
+      const recentSavingSessions = await getRecentSavingSessions(
+        config.octopusApiKey,
+        config.octopusAccountNumber,
+      );
+
+      const overnightStart = new Date(now);
+      overnightStart.setUTCHours(0, 0, 0, 0);
+      overnightStart.setUTCDate(overnightStart.getUTCDate() - 1);
+      const overnightEnd = new Date(now);
+      overnightEnd.setUTCHours(6, 0, 0, 0);
+
+      const participated = recentSavingSessions.find((session) => {
+        const endMs = new Date(session.endAt).getTime();
+        return (
+          Number.isFinite(endMs)
+          && endMs >= overnightStart.getTime()
+          && endMs <= overnightEnd.getTime()
+          && /joined|participated|completed/i.test(session.joinStatus)
+        );
+      });
+
+      if (participated) {
+        const estimatedEarningPounds = Number((participated.rewardPerKwhInOctopoints * 0.008).toFixed(2));
+        reportForEmail = {
+          ...reportForEmail,
+          savingSessionOvernightSummary: {
+            participated: true,
+            estimatedEarningPounds,
+          },
+        };
+      }
+    } catch {
+      // Best-effort enrichment only.
+    }
 
     // Send email if SMTP is configured for this user (falls back to global env vars)
     const smtpHost = config.smtpHost || process.env.AVEUM_SMTP_HOST;
@@ -182,7 +543,7 @@ async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult>
         fromEmail: config.fromEmail || process.env.AVEUM_FROM_EMAIL,
       };
       const result = await sendMorningReport(
-        dailySavingsReport,
+        reportForEmail,
         now.toISOString().slice(0, 10),
         smtpConfig,
       );
@@ -202,6 +563,7 @@ async function runForUser(config: UserConfig, now: Date): Promise<UserRunResult>
       netCostPence,
       evTargetAchieved: config.devices?.includes("ev") ? true : null,
       emailSent,
+      savingSessionLog: savingSessionTrackerNote,
     });
 
     // ── Persist daily result for dashboard read-back ─────────────────────────

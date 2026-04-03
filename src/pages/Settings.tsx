@@ -2,12 +2,27 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Check } from "lucide-react";
 
+interface UserDeviceConfig {
+  deviceId: string;
+  kind: "battery" | "ev_charger" | "solar_inverter" | "smart_meter" | "gateway";
+  brand?: string;
+  v2hCapable?: boolean;
+  v2hMinSocPercent?: number;
+}
+
 interface UserSettings {
   userName?: string;
   notifyEmail?: string;
   departureTime?: string;
+  targetSocPercent?: number;
   targetChargePct?: number;
+  v2hCapable?: boolean;
+  v2hMinSocPercent?: number;
+  deviceConfigs?: UserDeviceConfig[];
 }
+
+const DEFAULT_V2H_MIN_SOC_PERCENT = 30;
+const V2H_SUPPORTED_EV_BRANDS = new Set(["wallbox", "indra"]);
 
 const FIELD: React.CSSProperties = {
   display: "flex",
@@ -45,6 +60,7 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autosaveTick, setAutosaveTick] = useState(0);
 
   // Load current settings
   useEffect(() => {
@@ -55,44 +71,102 @@ export default function Settings() {
     fetch(`/api/users?userId=${encodeURIComponent(userId)}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.user) setSettings(data.user);
+        if (data.user) {
+          setSettings({
+            ...data.user,
+            targetSocPercent: data.user.targetSocPercent ?? data.user.targetChargePct,
+            v2hMinSocPercent: data.user.v2hMinSocPercent ?? DEFAULT_V2H_MIN_SOC_PERCENT,
+          });
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [userId]);
 
-  const handleSave = async () => {
-    if (!userId) return;
-    setSaving(true);
-    setError(null);
-    setSaved(false);
-
-    try {
-      const res = await fetch("/api/users", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId,
-          departureTime: settings.departureTime || undefined,
-          targetChargePct: settings.targetChargePct
-            ? Number(settings.targetChargePct)
-            : undefined,
-          notifyEmail: settings.notifyEmail || undefined,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Save failed");
-      } else {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2500);
-      }
-    } catch {
-      setError("Network error — please try again");
-    } finally {
-      setSaving(false);
+  useEffect(() => {
+    if (!userId || autosaveTick === 0) {
+      return;
     }
+
+    const timer = window.setTimeout(async () => {
+      setSaving(true);
+      setError(null);
+      setSaved(false);
+
+      try {
+        const res = await fetch("/api/users", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId,
+            departureTime: settings.departureTime || undefined,
+            targetSocPercent:
+              settings.targetSocPercent != null
+                ? Number(settings.targetSocPercent)
+                : undefined,
+            notifyEmail: settings.notifyEmail || undefined,
+            v2hCapable: Boolean(settings.v2hCapable),
+            v2hMinSocPercent: settings.v2hCapable
+              ? Number(settings.v2hMinSocPercent ?? DEFAULT_V2H_MIN_SOC_PERCENT)
+              : DEFAULT_V2H_MIN_SOC_PERCENT,
+            deviceConfigs: settings.deviceConfigs,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error ?? "Save failed");
+        } else {
+          setSaved(true);
+          window.setTimeout(() => setSaved(false), 2000);
+        }
+      } catch {
+        setError("Network error — please try again");
+      } finally {
+        setSaving(false);
+      }
+    }, 450);
+
+    return () => window.clearTimeout(timer);
+  }, [autosaveTick, settings, userId]);
+
+  const updateSettings = (updater: (current: UserSettings) => UserSettings) => {
+    setSettings((current) => updater(current));
+    setAutosaveTick((current) => current + 1);
+  };
+
+  const hasSupportedV2hCharger =
+    settings.deviceConfigs?.some(
+      (deviceConfig) =>
+        deviceConfig.kind === "ev_charger" &&
+        Boolean(deviceConfig.brand) &&
+        V2H_SUPPORTED_EV_BRANDS.has(deviceConfig.brand.toLowerCase()),
+    ) ?? false;
+
+  const displayedTargetSocPercent = settings.targetSocPercent ?? settings.targetChargePct ?? 80;
+
+  const displayedV2hMinSocPercent =
+    settings.v2hMinSocPercent ?? DEFAULT_V2H_MIN_SOC_PERCENT;
+
+  const syncV2hDeviceConfig = (patch: Partial<UserDeviceConfig>) => {
+    updateSettings((current) => {
+      const nextDeviceConfigs = [...(current.deviceConfigs ?? [])];
+      const evConfigIndex = nextDeviceConfigs.findIndex((deviceConfig) => deviceConfig.kind === "ev_charger");
+
+      if (evConfigIndex >= 0) {
+        nextDeviceConfigs[evConfigIndex] = {
+          ...nextDeviceConfigs[evConfigIndex],
+          ...patch,
+        };
+      }
+
+      return {
+        ...current,
+        deviceConfigs: nextDeviceConfigs,
+        ...(patch.v2hCapable !== undefined ? { v2hCapable: patch.v2hCapable } : {}),
+        ...(patch.v2hMinSocPercent !== undefined ? { v2hMinSocPercent: patch.v2hMinSocPercent } : {}),
+      };
+    });
   };
 
   if (!userId) {
@@ -259,7 +333,7 @@ export default function Settings() {
                 type="time"
                 value={settings.departureTime ?? "07:30"}
                 onChange={(e) =>
-                  setSettings((s) => ({ ...s, departureTime: e.target.value }))
+                  updateSettings((s) => ({ ...s, departureTime: e.target.value }))
                 }
                 style={INPUT}
               />
@@ -280,7 +354,7 @@ export default function Settings() {
                 <span
                   style={{ fontSize: 14, fontWeight: 800, color: "#38BDF8" }}
                 >
-                  {settings.targetChargePct ?? 80}%
+                  {displayedTargetSocPercent}%
                 </span>
               </div>
               <input
@@ -288,10 +362,11 @@ export default function Settings() {
                 min={20}
                 max={100}
                 step={5}
-                value={settings.targetChargePct ?? 80}
+                value={displayedTargetSocPercent}
                 onChange={(e) =>
-                  setSettings((s) => ({
+                  updateSettings((s) => ({
                     ...s,
+                    targetSocPercent: Number(e.target.value),
                     targetChargePct: Number(e.target.value),
                   }))
                 }
@@ -310,6 +385,104 @@ export default function Settings() {
                 <span>100%</span>
               </div>
             </div>
+
+            {hasSupportedV2hCharger && (
+              <div style={FIELD}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 12,
+                  }}
+                >
+                  <div>
+                    <label style={LABEL}>VEHICLE TO HOME</label>
+                    <div style={{ fontSize: 11, color: "#4B5563", marginTop: 4 }}>
+                      Enable Vehicle to Home
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      syncV2hDeviceConfig({
+                        v2hCapable: !settings.v2hCapable,
+                        v2hMinSocPercent: displayedV2hMinSocPercent,
+                      })
+                    }
+                    style={{
+                      width: 50,
+                      height: 30,
+                      borderRadius: 999,
+                      border: "none",
+                      background: settings.v2hCapable ? "#22C55E" : "#374151",
+                      position: "relative",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 3,
+                        left: settings.v2hCapable ? 24 : 3,
+                        width: 24,
+                        height: 24,
+                        borderRadius: "50%",
+                        background: "#F9FAFB",
+                        transition: "left 0.15s ease",
+                      }}
+                    />
+                  </button>
+                </div>
+
+                {settings.v2hCapable && (
+                  <>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "baseline",
+                        marginTop: 8,
+                      }}
+                    >
+                      <label style={LABEL}>MINIMUM EV CHARGE TO KEEP</label>
+                      <span style={{ fontSize: 14, fontWeight: 800, color: "#38BDF8" }}>
+                        {displayedV2hMinSocPercent}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={20}
+                      max={60}
+                      step={5}
+                      value={displayedV2hMinSocPercent}
+                      onChange={(e) =>
+                        syncV2hDeviceConfig({
+                          v2hMinSocPercent: Number(e.target.value),
+                        })
+                      }
+                      style={{ width: "100%", accentColor: "#38BDF8", cursor: "pointer" }}
+                    />
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        fontSize: 10,
+                        color: "#374151",
+                      }}
+                    >
+                      <span>20%</span>
+                      <span>40%</span>
+                      <span>60%</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#4B5563" }}>
+                      Aveum will never discharge your EV below this level.
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Notifications */}
@@ -342,7 +515,7 @@ export default function Settings() {
                 type="email"
                 value={settings.notifyEmail ?? ""}
                 onChange={(e) =>
-                  setSettings((s) => ({ ...s, notifyEmail: e.target.value }))
+                  updateSettings((s) => ({ ...s, notifyEmail: e.target.value }))
                 }
                 placeholder="you@example.com"
                 style={INPUT}
@@ -371,38 +544,33 @@ export default function Settings() {
           )}
 
           {/* Save button */}
-          <button
-            onClick={handleSave}
-            disabled={saving || saved}
+          <div
             style={{
               width: "100%",
-              background: saved ? "#166534" : "#22C55E",
-              border: "none",
+              background: saved ? "#166534" : "#111827",
+              border: `1px solid ${saved ? "#166534" : "#1F2937"}`,
               borderRadius: 12,
               padding: "14px",
-              color: saved ? "#86EFAC" : "#030712",
-              fontSize: 14,
-              fontWeight: 800,
-              cursor: saving || saved ? "default" : "pointer",
-              fontFamily: "inherit",
+              color: saved ? "#86EFAC" : "#9CA3AF",
+              fontSize: 13,
+              fontWeight: 700,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               gap: 8,
-              transition: "background 0.2s",
             }}
           >
             {saved ? (
               <>
                 <Check size={16} />
-                Saved
+                Changes saved automatically
               </>
             ) : saving ? (
-              "Saving…"
+              "Saving changes…"
             ) : (
-              "Save changes"
+              "Changes save automatically"
             )}
-          </button>
+          </div>
         </div>
       )}
     </div>

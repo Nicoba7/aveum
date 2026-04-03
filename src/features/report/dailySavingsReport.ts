@@ -17,12 +17,35 @@ export interface DailySavingsReportInput {
   setAndForgetNetCostPence: number;
 }
 
+export interface SolarDivertEvent {
+  destination: "EV" | "battery";
+  divertedKwh: number;
+  savedPence: number;
+}
+
+export interface PowerUpOvernightSummary {
+  count: number;
+  chargedKwh: number;
+}
+
+export interface SavingSessionOvernightSummary {
+  participated: boolean;
+  estimatedEarningPounds: number;
+}
+
 // ── Output ─────────────────────────────────────────────────────────────────────
 
 export interface SlotTimePrice {
   /** Wall-clock time label, e.g. "02:30". */
   time: string;
   pricePencePerKwh: number;
+}
+
+export interface V2HDischargeEvent {
+  timeRangeLabel: string;
+  savedPence: number;
+  chargeUsedPercent: number;
+  remainingPercent: number;
 }
 
 export interface DailySavingsReport {
@@ -42,6 +65,24 @@ export interface DailySavingsReport {
    * Null when no battery discharge was planned.
    */
   batteryDischargedAt: SlotTimePrice | null;
+  /**
+   * Aggregated V2H discharge event when the EV powered the home.
+   * Null when no V2H event was planned.
+   */
+  v2hDischargeEvent: V2HDischargeEvent | null;
+  /**
+   * Aggregated solar-divert event when surplus solar was routed to EV or battery.
+   * Null when no divert event was planned.
+   */
+  solarDivertEvent?: SolarDivertEvent | null;
+  /**
+   * Optional overnight Octopus Power-Up summary injected by the cron pipeline.
+   */
+  powerUpOvernightSummary?: PowerUpOvernightSummary | null;
+  /**
+   * Optional overnight Saving Session participation summary injected by the cron pipeline.
+   */
+  savingSessionOvernightSummary?: SavingSessionOvernightSummary | null;
   /**
    * A single-sentence plain-English summary of what Aveum achieved today.
    * Example: "Aveum charged your battery at 2.3p and discharged at 34p, saving you £1.23 today."
@@ -69,6 +110,19 @@ function formatPounds(pence: number): string {
 
 function formatPenceRate(pencePerKwh: number): string {
   return `${pencePerKwh.toFixed(1)}p`;
+}
+
+function formatCompactTime(isoString: string): string {
+  const date = new Date(isoString);
+  const hours = date.getUTCHours();
+  const minutes = date.getUTCMinutes();
+  const period = hours >= 12 ? "pm" : "am";
+  const twelveHour = hours % 12 === 0 ? 12 : hours % 12;
+  if (minutes === 0) {
+    return `${twelveHour}${period}`;
+  }
+
+  return `${twelveHour}:${String(minutes).padStart(2, "0")}${period}`;
 }
 
 /**
@@ -162,11 +216,74 @@ export function buildDailySavingsReport(input: DailySavingsReportInput): DailySa
     }
   }
 
+  const v2hDecisions = optimizerOutput.decisions.filter(
+    (d) => d.action === "discharge_ev_to_home",
+  );
+
+  let v2hDischargeEvent: V2HDischargeEvent | null = null;
+  if (v2hDecisions.length > 0) {
+    const ordered = [...v2hDecisions].sort(
+      (left, right) => new Date(left.startAt).getTime() - new Date(right.startAt).getTime(),
+    );
+    const first = ordered[0];
+    const last = ordered[ordered.length - 1];
+    const savedPence = ordered.reduce((sum, decision) => {
+      if (decision.expectedValuePence !== undefined) {
+        return sum + decision.expectedValuePence;
+      }
+
+      const importRate = importRateForSlot(decision.startAt, tariffSchedule) ?? 0;
+      return sum + ((decision.expectedEnergyTransferredKwh ?? 0) * importRate * 0.85);
+    }, 0);
+    const chargeUsedPercent = Math.max(
+      0,
+      (first.startingEvSocPercent ?? last.expectedEvSocPercent ?? 0) - (last.expectedEvSocPercent ?? first.startingEvSocPercent ?? 0),
+    );
+
+    v2hDischargeEvent = {
+      timeRangeLabel: `${formatCompactTime(first.startAt)}-${formatCompactTime(last.endAt)}`,
+      savedPence: Number(savedPence.toFixed(2)),
+      chargeUsedPercent: Math.round(chargeUsedPercent),
+      remainingPercent: Math.round(last.expectedEvSocPercent ?? first.startingEvSocPercent ?? 0),
+    };
+  }
+
+  const solarDivertDecisions = optimizerOutput.decisions.filter(
+    (d) => d.action === "divert_solar_to_ev" || d.action === "divert_solar_to_battery",
+  );
+
+  let solarDivertEvent: SolarDivertEvent | null = null;
+  if (solarDivertDecisions.length > 0) {
+    const divertedToEvKwh = solarDivertDecisions
+      .filter((decision) => decision.action === "divert_solar_to_ev")
+      .reduce((sum, decision) => sum + (decision.expectedEnergyTransferredKwh ?? 0), 0);
+    const divertedToBatteryKwh = solarDivertDecisions
+      .filter((decision) => decision.action === "divert_solar_to_battery")
+      .reduce((sum, decision) => sum + (decision.expectedEnergyTransferredKwh ?? 0), 0);
+    const divertedKwh = divertedToEvKwh + divertedToBatteryKwh;
+    const savedPence = solarDivertDecisions.reduce((sum, decision) => {
+      if (decision.expectedValuePence !== undefined) {
+        return sum + decision.expectedValuePence;
+      }
+
+      const importRate = importRateForSlot(decision.startAt, tariffSchedule) ?? 0;
+      return sum + ((decision.expectedEnergyTransferredKwh ?? 0) * importRate);
+    }, 0);
+
+    solarDivertEvent = {
+      destination: divertedToEvKwh >= divertedToBatteryKwh ? "EV" : "battery",
+      divertedKwh: Number(divertedKwh.toFixed(2)),
+      savedPence: Number(savedPence.toFixed(2)),
+    };
+  }
+
   // ── One-liner ─────────────────────────────────────────────────────────────────
   const oneLiner = buildOneLiner({
     savedTodayPence,
     cheapestSlotUsed,
     batteryDischargedAt,
+    v2hDischargeEvent,
+    solarDivertEvent,
     evChargedAt,
     earnedFromExportPence,
   });
@@ -176,6 +293,8 @@ export function buildDailySavingsReport(input: DailySavingsReportInput): DailySa
     savedTodayPence,
     cheapestSlotUsed,
     batteryDischargedAt,
+    v2hDischargeEvent,
+    solarDivertEvent,
     evChargedAt,
     earnedFromExportPence,
     chargeCount: chargeDecisions.length,
@@ -189,6 +308,10 @@ export function buildDailySavingsReport(input: DailySavingsReportInput): DailySa
     cheapestSlotUsed,
     evChargedAt,
     batteryDischargedAt,
+    v2hDischargeEvent,
+    solarDivertEvent,
+    powerUpOvernightSummary: null,
+    savingSessionOvernightSummary: null,
     oneLiner,
     nightlyNarrative,
   };
@@ -200,12 +323,14 @@ interface OneLinerInput {
   savedTodayPence: number;
   cheapestSlotUsed: SlotTimePrice | null;
   batteryDischargedAt: SlotTimePrice | null;
+  v2hDischargeEvent: V2HDischargeEvent | null;
+  solarDivertEvent: SolarDivertEvent | null;
   evChargedAt: SlotTimePrice | null;
   earnedFromExportPence: number;
 }
 
 function buildOneLiner(input: OneLinerInput): string {
-  const { savedTodayPence, cheapestSlotUsed, batteryDischargedAt, evChargedAt, earnedFromExportPence } = input;
+  const { savedTodayPence, cheapestSlotUsed, batteryDischargedAt, v2hDischargeEvent, solarDivertEvent, evChargedAt, earnedFromExportPence } = input;
 
   const savingsPhrase =
     savedTodayPence > 0
@@ -214,6 +339,14 @@ function buildOneLiner(input: OneLinerInput): string {
 
   if (cheapestSlotUsed && batteryDischargedAt) {
     return `Aveum charged your battery at ${formatPenceRate(cheapestSlotUsed.pricePencePerKwh)} and discharged at ${formatPenceRate(batteryDischargedAt.pricePencePerKwh)}, ${savingsPhrase}.`;
+  }
+
+  if (v2hDischargeEvent) {
+    return `Aveum used your EV to power the home from ${v2hDischargeEvent.timeRangeLabel}, ${savingsPhrase}.`;
+  }
+
+  if (solarDivertEvent) {
+    return `Aveum diverted ${solarDivertEvent.divertedKwh.toFixed(1)}kWh of surplus solar to your ${solarDivertEvent.destination}, ${savingsPhrase}.`;
   }
 
   if (cheapestSlotUsed && evChargedAt) {
@@ -239,6 +372,8 @@ interface NarrativeInput {
   savedTodayPence: number;
   cheapestSlotUsed: SlotTimePrice | null;
   batteryDischargedAt: SlotTimePrice | null;
+  v2hDischargeEvent: V2HDischargeEvent | null;
+  solarDivertEvent: SolarDivertEvent | null;
   evChargedAt: SlotTimePrice | null;
   earnedFromExportPence: number;
   chargeCount: number;
@@ -251,6 +386,8 @@ function buildNightlyNarrative(input: NarrativeInput): string {
     savedTodayPence,
     cheapestSlotUsed,
     batteryDischargedAt,
+    v2hDischargeEvent,
+    solarDivertEvent,
     evChargedAt,
     earnedFromExportPence,
     chargeCount,
@@ -277,6 +414,18 @@ function buildNightlyNarrative(input: NarrativeInput): string {
     const slots = dischargeCount === 1 ? "1 slot" : `${dischargeCount} slots`;
     sentences.push(
       `During the peak price period (up to ${formatPenceRate(batteryDischargedAt.pricePencePerKwh)}), Aveum discharged the battery across ${slots} to power your home from stored energy instead of the grid.`,
+    );
+  }
+
+  if (v2hDischargeEvent) {
+    sentences.push(
+      `During ${v2hDischargeEvent.timeRangeLabel}, your EV powered the home, saving ${formatPounds(v2hDischargeEvent.savedPence)} while keeping ${v2hDischargeEvent.remainingPercent}% charge for tomorrow.`,
+    );
+  }
+
+  if (solarDivertEvent) {
+    sentences.push(
+      `Aveum diverted ${solarDivertEvent.divertedKwh.toFixed(1)}kWh of surplus solar to your ${solarDivertEvent.destination}, avoiding around ${formatPounds(solarDivertEvent.savedPence)} of future grid charging.`,
     );
   }
 

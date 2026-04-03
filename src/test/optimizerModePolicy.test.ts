@@ -35,6 +35,35 @@ function buildDevices(): DeviceState[] {
   ];
 }
 
+function buildV2hDevices(): DeviceState[] {
+  return [
+    {
+      deviceId: "ev-charger-1",
+      kind: "ev_charger",
+      brand: "Wallbox",
+      name: "Wallbox Quasar",
+      connectionStatus: "online",
+      lastUpdatedAt: "2026-03-16T10:00:00.000Z",
+      capabilities: ["schedule_window", "read_power", "read_soc", "vehicle_to_home"],
+      capacityKwh: 60,
+      connected: true,
+      metadata: {
+        v2hCapable: true,
+        v2hMinSocPercent: 30,
+      },
+    },
+    {
+      deviceId: "grid-1",
+      kind: "smart_meter",
+      brand: "Octopus",
+      name: "Grid",
+      connectionStatus: "online",
+      lastUpdatedAt: "2026-03-16T10:00:00.000Z",
+      capabilities: ["read_tariff", "read_power"],
+    },
+  ];
+}
+
 function buildInput(params: {
   mode: OptimizationMode;
   importRates: number[];
@@ -47,6 +76,7 @@ function buildInput(params: {
   solarSlotsCount?: number;
   devices?: DeviceState[];
   evConnected?: boolean;
+  evSocPercent?: number;
 }): OptimizerInput {
   const start = new Date("2026-03-16T10:00:00.000Z").getTime();
   const capturedAt = params.capturedAt ?? "2026-03-16T10:00:00.000Z";
@@ -66,6 +96,7 @@ function buildInput(params: {
       gridPowerW: 0,
       batterySocPercent: 60,
       batteryCapacityKwh: 10,
+      evSocPercent: params.evSocPercent,
       evConnected: params.evConnected ?? false,
     },
     forecasts: {
@@ -502,5 +533,25 @@ describe("optimize mode-aware objective behavior", () => {
     expect(first.generatedAt).toBe("2026-03-16T10:05:00.000Z");
     expect(second.generatedAt).toBe("2026-03-16T10:35:00.000Z");
     expect(first.planId).not.toBe(second.planId);
+  });
+
+  it("selects V2H discharge in peak slots when the EV can safely cover household load", () => {
+    const result = optimize(
+      buildInput({
+        mode: "cost",
+        importRates: [34, 12],
+        exportRates: [0, 0],
+        loadKwh: 1,
+        solarKwh: 0,
+        devices: buildV2hDevices(),
+        evConnected: true,
+        evSocPercent: 90,
+      }),
+    );
+
+    expect(result.decisions[0]?.action).toBe("discharge_ev_to_home");
+    expect(result.decisions[0]?.targetDeviceIds).toEqual(["ev-charger-1"]);
+    expect(result.decisions[0]?.reason).toContain("mobility reserve");
+    expect(result.decisions[0]?.expectedValuePence).toBeGreaterThan(0);
   });
 });

@@ -29,6 +29,7 @@ import { buildRuntimeGroundedExplanationLines } from "../lib/decisionExplanation
 import { buildDecisionExplanation } from "../lib/decisionExplanation";
 import { buildDecisionFreshnessViewModel, DECISION_FRESHNESS_TOOLTIP } from "../lib/decisionFreshness";
 import { buildHomeRuntimeReadModel } from "../features/home/homeRuntimeReadModel";
+import { buildDailySavingsReport } from "../features/report/dailySavingsReport";
 import type { CycleHeartbeatEntry, DecisionExplainedJournalEntry } from "../journal/executionJournal";
 
 const ENABLE_HOME_SIMULATION = import.meta.env.DEV;
@@ -187,7 +188,10 @@ function mapActionHeadline(params: {
   const decisionType = params.decisionType?.toLowerCase().trim() ?? "";
   const canonicalAction = params.canonicalAction?.toLowerCase().trim() ?? "";
 
+  if (decisionType.includes("divert_solar_to_ev")) return "Diverting solar to EV";
+  if (decisionType.includes("divert_solar_to_battery")) return "Diverting solar to battery";
   if (decisionType.includes("charge") || canonicalAction === "charge") return "Charging battery";
+  if (decisionType.includes("discharge_ev_to_home")) return "EV powering your home";
   if (decisionType.includes("discharge") || canonicalAction === "discharge") return "Powering home from battery";
   if (decisionType.includes("solar") || decisionType.includes("export") || canonicalAction === "export") {
     return "Running home on solar";
@@ -718,6 +722,14 @@ export default function HomeTab({
     currentPence,
     hasEV,
   }, slotIndex);
+  const dailySavingsReport = useMemo(
+    () => buildDailySavingsReport({
+      optimizerOutput,
+      tariffSchedule: optimizerInput.tariffSchedule,
+      setAndForgetNetCostPence: 0,
+    }),
+    [optimizerInput.tariffSchedule, optimizerOutput],
+  );
   const [selectedTimelineItem, setSelectedTimelineItem] = useState<TimelineItem | null>(null);
   const isCharging = homeOptimizerView.currentAction === "charge";
   const isExporting = homeOptimizerView.currentAction === "export";
@@ -834,6 +846,12 @@ export default function HomeTab({
   }
 
   const topActionWindow = useMemo(() => {
+    if (dailySavingsReport.v2hDischargeEvent) {
+      return {
+        line: `EV powered your home ${dailySavingsReport.v2hDischargeEvent.timeRangeLabel} · saved £${(dailySavingsReport.v2hDischargeEvent.savedPence / 100).toFixed(2)} · ${dailySavingsReport.v2hDischargeEvent.chargeUsedPercent}% charge used · ${dailySavingsReport.v2hDischargeEvent.remainingPercent}% remaining for tomorrow.`,
+      };
+    }
+
     const timelineRows = homeOptimizerView.timeline;
     if (!timelineRows.length) return null;
 
@@ -879,7 +897,7 @@ export default function HomeTab({
     }
 
     return null;
-  }, [homeOptimizerView.timeline, slotIndex, hasEV, currentPence]);
+  }, [dailySavingsReport.v2hDischargeEvent, homeOptimizerView.timeline, slotIndex, hasEV, currentPence]);
 
   return (
     <div style={{ background: "#060A12", minHeight: "100vh", paddingBottom: 30 }}>

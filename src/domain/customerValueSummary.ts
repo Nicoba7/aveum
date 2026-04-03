@@ -1,4 +1,4 @@
-import type { CanonicalValueLedger } from "./valueLedger";
+import type { CanonicalValueLedger } from "./valueLedger.js";
 
 export interface CustomerValueSummary {
   /** Estimated savings vs hold-current-state baseline, in GBP. Derived from ledger.estimatedSavingsVsBaselinePence. */

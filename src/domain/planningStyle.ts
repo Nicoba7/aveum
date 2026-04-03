@@ -1,4 +1,4 @@
-import type { OptimizationMode } from "./optimizer";
+import type { OptimizationMode } from "./optimizer.js";
 
 export type PlanningStyle = "cheapest" | "balanced" | "greenest";
 

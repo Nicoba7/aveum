@@ -99,6 +99,30 @@ function buildBullets(report: DailySavingsReport): string[] {
     );
   }
 
+  if (report.v2hDischargeEvent) {
+    bullets.push(
+      `EV powered your home ${report.v2hDischargeEvent.timeRangeLabel} · saved ${formatPounds(report.v2hDischargeEvent.savedPence)} · ${report.v2hDischargeEvent.chargeUsedPercent}% charge used · ${report.v2hDischargeEvent.remainingPercent}% remaining for tomorrow.`,
+    );
+  }
+
+  if (report.solarDivertEvent) {
+    bullets.push(
+      `Diverted ${report.solarDivertEvent.divertedKwh.toFixed(1)}kWh of surplus solar to your ${report.solarDivertEvent.destination} — saved ${formatPounds(report.solarDivertEvent.savedPence)} vs grid charging.`,
+    );
+  }
+
+  if (report.powerUpOvernightSummary && report.powerUpOvernightSummary.count > 0) {
+    bullets.push(
+      `Caught ${report.powerUpOvernightSummary.count} Octopus Power-Up${report.powerUpOvernightSummary.count === 1 ? "" : "s"} last night — charged ${report.powerUpOvernightSummary.chargedKwh.toFixed(1)}kWh for free.`,
+    );
+  }
+
+  if (report.savingSessionOvernightSummary?.participated) {
+    bullets.push(
+      `Saving Session: participated, estimated earning £${report.savingSessionOvernightSummary.estimatedEarningPounds.toFixed(2)}.`,
+    );
+  }
+
   if (report.evChargedAt) {
     bullets.push(
       `EV charged from ${report.evChargedAt.time} at an average of ${formatPenceRate(report.evChargedAt.pricePencePerKwh)} — ready before departure`,
